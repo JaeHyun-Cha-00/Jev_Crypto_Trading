@@ -27,7 +27,7 @@ services:
       timeout: 10s
       retries: 3
 
-  # Backstop for GitHub's hourly schedule, which can skip runs: at :20 it starts
+  # Backstop for GitHub's hourly schedule, which can skip runs: from :01 it starts
   # the collect workflow if no run started this hour. Needs GITHUB_TOKEN with
   # "Actions: read and write"; without one it exits and stays stopped.
   collect-kick:

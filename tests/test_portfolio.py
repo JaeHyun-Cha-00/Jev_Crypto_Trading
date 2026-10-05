@@ -277,3 +277,38 @@ def test_skill_gate_never_blocks_a_sale():
     [t] = r["trades"]
     assert t["exit_reason"].startswith("model_exit") and t["exit_ts"] == T0 + 10 * H
     assert r["gate"]["open"] is False
+
+
+def test_hours_show_each_hours_picks_what_the_account_did_and_how_they_did():
+    rows = [row("BTC/USD", 0, 100.0, up=0.7, down=0.0), row("SOL/USD", 0, 20.0, up=0.6, down=0.2)]
+    rows += [row("BTC/USD", i, 100.0 + i) for i in range(1, 6)]
+    rows += [row("SOL/USD", i, 20.0) for i in range(1, 6)]
+    rows += [row("ETH/USD", i, 50.0, status="error" if i == 0 else "answered") for i in range(6)]
+    r = run(rows)
+    assert [h["bar_ts"] for h in r["hours"]] == [T0 + i * H for i in range(5, -1, -1)]   # newest first
+    h = r["hours"][-1]
+    assert (h["asked"], h["answered"]) == (3, 2)
+    assert [p["symbol"] for p in h["picks"]] == ["BTC/USD", "SOL/USD"]   # highest p(up) first
+    btc, sol = h["picks"]
+    assert btc["action"] == "enter" and btc["why"] == "entry" and h["bought"] == ["BTC/USD", "SOL/USD"]
+    # Resolved at hour 4 (horizon 4): BTC rose 4%, SOL and ETH were flat.
+    assert btc["ret"] == pytest.approx(0.04) and btc["net"] == pytest.approx(0.04 - 2 * 12 / 10_000)
+    assert sol["ret"] == 0.0 and h["market"] == pytest.approx(0.04 / 3)
+    assert h["resolves_at"] == T0 + 4 * H
+    later = r["hours"][0]   # hour 5: no picks, horizon still open
+    assert later["picks"] == [] and later["market"] is None and later["bought"] == []
+
+
+def test_hours_list_picks_the_skill_gate_held_back():
+    rows = [row("BTC/USD", i, 100.0 + i, up=0.7, down=0.0) for i in range(8)]
+    r = run(rows, gated(24, 1000))
+    assert all(h["held_back"] == 1 and h["bought"] == [] for h in r["hours"])
+    [p] = r["hours"][0]["picks"]
+    assert (p["symbol"], p["action"], p["why"]) == ("BTC/USD", "skip", "skill_gate")
+
+
+def test_an_hour_the_collector_skipped_still_gets_a_row():
+    rows = [row("BTC/USD", i, 100.0) for i in (0, 1, 3)]
+    r = run(rows)
+    assert [(h["bar_ts"], h["asked"]) for h in r["hours"]] == [(T0 + 3 * H, 1), (T0 + 2 * H, 0), (T0 + H, 1), (T0, 1)]
+    assert r["hours"][1]["picks"] == [] and r["hours"][1]["market"] is None

@@ -20,6 +20,7 @@ from typing import Iterator
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from ..sim import SimState
 from ..data.timeframes import timeframe_ms
@@ -52,6 +53,8 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | 
                   description="Paper-trading state. GET only; the database is opened read-only.")
     app.add_middleware(CORSMiddleware, allow_origins=app_cfg.api.cors_origins,
                        allow_methods=["GET"], allow_headers=["*"])
+    # The dashboard pulls the replay (hundreds of KB of JSON) every minute.
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
 
     def connect_ro() -> sqlite3.Connection:
         return sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True, check_same_thread=False)
@@ -272,10 +275,10 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | 
     paper_cache: dict = {}
 
     @app.get("/api/forward/paper")
-    def forward_paper(actions: int = Query(200, ge=0, le=5_000)):
+    def forward_paper(actions: int = Query(200, ge=0, le=5_000), hours: int = Query(168, ge=0, le=5_000)):
         """Jev's simulated account: the policy and simulator replayed over the forward log's
         answers and closes from forward_log.start on. No model or exchange calls;
-        fills are simulated."""
+        fills are simulated. `actions` and `hours` cap the newest calls and hours returned."""
         snap = fwd.snapshot()
         if paper_cache.get("snap") is not snap:   # replay once per forward-log refresh
             start = app_cfg.forward_log.start_ms()
@@ -285,6 +288,7 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | 
             paper_cache.update(snap=snap, out=out)
         out = dict(paper_cache["out"])
         out["actions"] = out["actions"][:actions]
+        out["hours"] = out["hours"][:hours]
         return out
 
     # -- live market (public Coinbase data; jevtrade.data.market)
