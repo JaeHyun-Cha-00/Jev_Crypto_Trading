@@ -1,10 +1,8 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { EquityPoint } from "./api";
 import { fmtMoney, fmtTime } from "./format";
 
-const W = 900;
-const H = 260;
-const PAD = { top: 12, right: 16, bottom: 28, left: 72 };
+const NARROW = 600;
 
 function niceTicks(lo: number, hi: number, n = 4): number[] {
   if (hi <= lo) return [lo];
@@ -18,8 +16,24 @@ function niceTicks(lo: number, hi: number, n = 4): number[] {
 
 /** Single-series equity line with a crosshair tooltip. One series, so no legend. */
 export function EquityChart({ points, initial }: { points: EquityPoint[]; initial: number }) {
+  const boxRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const fillId = useId();
   const [hover, setHover] = useState<number | null>(null);
+  // Draw at the real pixel width so labels stay readable and the chart keeps some height on a phone.
+  const [W, setW] = useState(900);
+  const narrow = W < NARROW;
+  const H = narrow ? 220 : 280;
+  const PAD = { top: 12, right: 8, bottom: 28, left: narrow ? 52 : 64 };
+  const hasData = points.length > 0;
+
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setW(Math.max(280, Math.round(e.contentRect.width))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [hasData]);
 
   const geo = useMemo(() => {
     if (points.length === 0) return null;
@@ -35,10 +49,12 @@ export function EquityChart({ points, initial }: { points: EquityPoint[]; initia
     const sx = (t: number) => PAD.left + ((t - x0) / (x1 - x0)) * (W - PAD.left - PAD.right);
     const sy = (v: number) => PAD.top + (1 - (v - lo) / (hi - lo)) * (H - PAD.top - PAD.bottom);
     const d = points.map((p, i) => `${i ? "L" : "M"}${sx(p.bar_ts).toFixed(1)},${sy(p.equity).toFixed(1)}`).join("");
+    const area = `${d}L${sx(xs[xs.length - 1]).toFixed(1)},${H - PAD.bottom}L${sx(x0).toFixed(1)},${H - PAD.bottom}Z`;
     const yTicks = niceTicks(lo, hi);
-    const xTicks = [0, 0.33, 0.66, 1].map((f) => x0 + f * (x1 - x0));
-    return { sx, sy, d, yTicks, xTicks, x0, x1 };
-  }, [points, initial]);
+    const xTicks = (narrow ? [0, 0.5, 1] : [0, 0.33, 0.66, 1]).map((f) => x0 + f * (x1 - x0));
+    return { sx, sy, d, area, yTicks, xTicks, x0, x1 };
+    // PAD, H and narrow all follow W.
+  }, [points, initial, W]);
 
   if (!geo) return <p className="muted">No equity yet. The paper loop records one point per closed bar.</p>;
 
@@ -56,7 +72,8 @@ export function EquityChart({ points, initial }: { points: EquityPoint[]; initia
   const tipLeft = hp ? (geo.sx(hp.bar_ts) / W) * 100 : 0;
 
   return (
-    <div className="chart">
+    // Green when above the starting equity, red when below, like a price chart.
+    <div ref={boxRef} className={`chart ${points[points.length - 1].equity >= initial ? "up" : "down"}`}>
       <svg
         ref={svgRef}
         viewBox={`0 0 ${W} ${H}`}
@@ -65,6 +82,12 @@ export function EquityChart({ points, initial }: { points: EquityPoint[]; initia
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
       >
+        <defs>
+          <linearGradient id={fillId} x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopOpacity={0.18} className="stop" />
+            <stop offset="100%" stopOpacity={0} className="stop" />
+          </linearGradient>
+        </defs>
         {geo.yTicks.map((v) => (
           <g key={v}>
             <line className="grid" x1={PAD.left} x2={W - PAD.right} y1={geo.sy(v)} y2={geo.sy(v)} />
@@ -75,10 +98,11 @@ export function EquityChart({ points, initial }: { points: EquityPoint[]; initia
         ))}
         <line className="ref" x1={PAD.left} x2={W - PAD.right} y1={geo.sy(initial)} y2={geo.sy(initial)} />
         {geo.xTicks.map((t, i) => (
-          <text key={i} className="tick" x={geo.sx(t)} y={H - 8} textAnchor={i === 0 ? "start" : i === 3 ? "end" : "middle"}>
-            {fmtTime(t)}
+          <text key={i} className="tick" x={geo.sx(t)} y={H - 8} textAnchor={i === 0 ? "start" : i === geo.xTicks.length - 1 ? "end" : "middle"}>
+            {narrow ? fmtTime(t).slice(5) : fmtTime(t)}
           </text>
         ))}
+        <path d={geo.area} fill={`url(#${fillId})`} stroke="none" />
         <path className="line" d={geo.d} />
         {hp && (
           <g>
