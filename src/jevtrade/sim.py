@@ -98,7 +98,8 @@ class SimState:
 
 class Simulator:
     def __init__(self, policy_cfg: PolicyConfig, tf_ms: int, fee_bps: float, slippage_bps: float,
-                 spread_bps: Callable[[str, int], float] | None = None):
+                 spread_bps: Callable[[str, int], float] | None = None,
+                 max_notional: Callable[[str, int], float] | None = None):
         self.pcfg = policy_cfg
         self.policy = Policy(policy_cfg, tf_ms)
         self.tf_ms = tf_ms
@@ -106,6 +107,8 @@ class Simulator:
         self.slippage_bps = slippage_bps
         # Per-side spread from the mid for (symbol, bar_ts), on every fill; None = no spread.
         self.spread_bps = spread_bps
+        # Largest entry notional the market can absorb for (symbol, bar_ts); None = no cap.
+        self.max_notional = max_notional
 
     def _spread(self, sym: str, ts: int) -> float:
         return self.spread_bps(sym, ts) if self.spread_bps is not None else 0.0
@@ -144,6 +147,8 @@ class Simulator:
             elif p.action.kind == "enter" and sym not in st.open:
                 px = bar.open * (1 + (self.slippage_bps + self._spread(sym, ts)) / 10_000)
                 qty = p.action.size_frac * st.equity() / px
+                if self.max_notional is not None:
+                    qty = min(qty, self.max_notional(sym, ts) / px)
                 fee = self._fee(qty * px)
                 if qty * px + fee > st.cash:  # never borrow; long-only spot
                     qty = max(0.0, (st.cash - fee) / px)

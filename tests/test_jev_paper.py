@@ -192,3 +192,16 @@ def test_spread_scales_on_log_volume():
     assert c.spread_for(5e6) == c.spread_for(5e9) == 95
     assert c.spread_for(5e5) == pytest.approx(105) and c.spread_for(5e4) == pytest.approx(115)
     assert c.spread_for(None) == c.spread_for(0) == 115
+
+
+def test_buys_are_capped_at_a_share_of_hourly_dollar_volume():
+    cfg = old_costs()
+    cfg.jev_paper.max_volume_frac = 0.01
+    # $100 x 500 = $50k an hour: at most $500 of it, though the rules want ~$3.3k.
+    rows = [_ohlc(row("PNUT/USD", 0, 100.0, up=0.6, down=0.1), 100.0, 100.0, 100.0, 500.0),
+            _ohlc(row("PNUT/USD", 1, 100.0), 100.0, 100.0, 100.0, 500.0)]
+    [p] = run(rows, cfg)["positions"]
+    assert p["qty"] * p["entry_price"] == pytest.approx(500.0)
+    cfg.jev_paper.max_volume_frac = None
+    [p] = run(rows, cfg)["positions"]
+    assert p["qty"] * p["entry_price"] == pytest.approx(10_000 / 3, rel=1e-3)

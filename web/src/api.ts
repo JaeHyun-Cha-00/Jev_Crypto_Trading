@@ -134,6 +134,8 @@ export interface JevPaper {
   slippage_bps: number;
   /** per-side spread from the mid, bps: deep coins pay min, the thinnest max */
   spread_bps: { min: number; max: number };
+  /** a buy is at most this share of the coin's median hourly dollar volume; null = no cap */
+  max_volume_frac: number | null;
   policy: { entry_threshold: number; min_edge: number; exit_threshold: number; stop_loss_pct: number; max_holding_bars: number | null };
   equity: number;
   cash: number;
