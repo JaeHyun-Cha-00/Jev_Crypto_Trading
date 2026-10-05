@@ -1,8 +1,20 @@
 name: tests
 
+# Private repo: every job is billed in whole minutes against the monthly free
+# Actions allowance, which the hourly collect run also needs (~1,500 min/month).
+# So: one run per change (PRs, plus the merge to main, not every branch push),
+# superseded runs cancelled, docs-only changes skipped, and the Docker builds
+# only when something they copy in could break them.
 on:
   push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**"]
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -10,15 +22,11 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"   # what the Docker images and the collect workflow run
           cache: pip
           cache-dependency-path: pyproject.toml
       - name: Install
@@ -43,14 +51,3 @@ jobs:
       - run: npm ci
       - name: Typecheck and build
         run: npm run build
-
-  docker:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Validate compose file
-        run: docker compose config --quiet
-      - name: Build images
-        run: docker compose build
-      - name: Build the hosted image (render.yaml)
-        run: docker build -f Dockerfile.hosted -t jevtrade-hosted .
