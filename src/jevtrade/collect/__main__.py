@@ -43,7 +43,8 @@ def main() -> None:
     res = Collector(cfg, JevModel(cfg.decision.jev), source, args.out,
                     max_backfill=args.max_backfill).run()
     print(f"jev_calls={len(res.called)} errors={len(res.errors)} "
-          f"outcomes={len(res.outcomes)} cost_usd={res.cost_usd:.6f}")
+          f"outcomes={len(res.outcomes)} failed_symbols={len(res.failed_symbols)} "
+          f"cost_usd={res.cost_usd:.6f}")
     if res.errors and len(res.errors) == len(res.called):
         raise SystemExit("every Jev call failed; see the log above")
 

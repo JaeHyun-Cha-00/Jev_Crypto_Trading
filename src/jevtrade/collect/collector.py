@@ -62,6 +62,7 @@ class CollectResult:
     called: list[tuple[str, int]] = field(default_factory=list)   # (symbol, candle_ts)
     errors: list[tuple[str, int]] = field(default_factory=list)
     outcomes: list[tuple[str, int]] = field(default_factory=list)
+    failed_symbols: list[str] = field(default_factory=list)       # candle fetch failed
     cost_usd: float = 0.0
 
 
@@ -227,7 +228,14 @@ class Collector:
 
         res = CollectResult()
         for sym in self.cfg.data.symbols:
-            df = self.fetch(sym, latest)
+            # One coin's exchange error (delisted, rate limit) must not cost the
+            # rest of the pass; that coin is retried next hour.
+            try:
+                df = self.fetch(sym, latest)
+            except Exception as e:  # noqa: BLE001 - ccxt raises many types
+                log.warning("%s: candle fetch failed: %s", sym, e)
+                res.failed_symbols.append(sym)
+                continue
             if df.empty:
                 log.warning("%s: no candles returned", sym)
                 continue
