@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from .backtest.engine import BacktestConfig
 from .decision.base import DecisionConfig
 from .features.compute import FeatureConfig
+from .paper.engine import PaperConfig
 from .policy.engine import PolicyConfig
 from .state.builder import StateConfig
 
@@ -53,6 +54,7 @@ class AppConfig(BaseModel):
     decision: DecisionConfig = Field(default_factory=DecisionConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
+    paper: PaperConfig = Field(default_factory=PaperConfig)
 
     @model_validator(mode="after")
     def _holding_follows_horizon(self) -> "AppConfig":
