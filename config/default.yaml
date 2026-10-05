@@ -125,10 +125,13 @@ jev_paper:                   # the dashboard's Jev portfolio, replayed from the 
   max_volume_frac: 0.01      # a buy is at most 1% of that hourly dollar volume; null = no cap
   # Skill gate: buy only while Jev's buy signals of the last 7 days (every answer
   # that met the buy thresholds) returned more than their round-trip cost and
-  # more than the average coin over the next 24 hours. Until 1000 of them have
-  # resolved (about 4 days after a fresh start), nothing is bought. null = no gate.
+  # more than the average coin over the next 24 hours. Until 500 of them have
+  # resolved, nothing is bought: about 2.5 days after a fresh start at 15
+  # signals an hour, 4.5 days at 6 (24 hours to resolve, then 500 / rate). The
+  # 144 resolved hours a 7-day window holds reach 500 only while Jev averages
+  # 3.5 signals an hour or more. null = no gate.
   gate_lookback_hours: 168
-  gate_min_signals: 1000
+  gate_min_signals: 500
 
 report:                      # python -m jevtrade.report [--day YYYY-MM-DD]
   output_dir: reports/out    # <output_dir>/<run id>/<day>.md and .json (git-ignored)
