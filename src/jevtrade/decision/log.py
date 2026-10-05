@@ -31,6 +31,20 @@ CREATE TABLE IF NOT EXISTS decisions (
     created_at    TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_decisions_run ON decisions(run_id, symbol, bar_ts);
+
+-- One row per answered question, for calibration against realized outcomes
+-- (join on decisions.symbol / bar_ts and the candles that follow).
+CREATE TABLE IF NOT EXISTS decision_answers (
+    decision_id     INTEGER NOT NULL REFERENCES decisions(id),
+    question        TEXT    NOT NULL,
+    qtype           TEXT    NOT NULL,   -- choice | noul
+    choice          TEXT,               -- selected option ('true'/'false' for noul at 0.5)
+    probabilities   TEXT    NOT NULL,   -- JSON {option: p}; noul -> {true: p, false: 1-p}
+    noul            REAL,               -- P(yes) as returned, noul questions only
+    confidence      REAL,               -- model-reported confidence (choice only)
+    gate_confidence REAL,               -- choice: confidence; noul: |2p - 1|
+    PRIMARY KEY (decision_id, question)
+);
 """
 
 
@@ -52,7 +66,15 @@ class DecisionLog:
                  d.latency_ms, d.input_tokens, d.cost_usd,
                  datetime.now(timezone.utc).isoformat()),
             )
-        return int(cur.lastrowid)
+            decision_id = int(cur.lastrowid)
+            self.conn.executemany(
+                "INSERT INTO decision_answers (decision_id, question, qtype, choice, probabilities,"
+                " noul, confidence, gate_confidence) VALUES (?,?,?,?,?,?,?,?)",
+                [(decision_id, q, a["type"], a.get("choice"), json.dumps(a["probabilities"]),
+                  a.get("noul"), a.get("confidence"), a.get("gate_confidence"))
+                 for q, a in (d.extra.get("answers") or {}).items()],
+            )
+        return decision_id
 
     def annotate(self, decision_id: int, passed: bool, action: str, reason: str) -> None:
         with self.conn:

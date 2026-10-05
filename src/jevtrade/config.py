@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .decision.base import DecisionConfig
 from .features.compute import FeatureConfig
@@ -51,6 +51,14 @@ class AppConfig(BaseModel):
     state: StateConfig = Field(default_factory=StateConfig)
     decision: DecisionConfig = Field(default_factory=DecisionConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
+
+    @model_validator(mode="after")
+    def _holding_follows_horizon(self) -> "AppConfig":
+        # Unless set explicitly, positions are held no longer than the horizon
+        # the direction question asks about, so the two stay in sync.
+        if "max_holding_bars" not in self.policy.model_fields_set:
+            self.policy.max_holding_bars = self.decision.horizon_bars
+        return self
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:
