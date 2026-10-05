@@ -168,7 +168,7 @@ function Bought({ paper, symbol }: { paper: JevPaper | null; symbol: string }) {
               <tr key={`pending-${p.symbol}`}>
                 <td><Coin symbol={p.symbol} /></td>
                 <td><span className="tag">buying</span></td>
-                <td className="muted">next hour's open</td>
+                <td className="muted">{p.fill_after != null ? `at ${fmtTime(p.fill_after)}` : "next hour's open"}</td>
                 <td className="num">~{fmtPrice(p.ref_close)}</td>
                 <td className="num">{fmtPct(p.size_frac, false)} of equity</td>
                 <td>–</td><td className="num">–</td><td className="num">–</td>
@@ -417,7 +417,8 @@ export default function App() {
               </dl>
             )}
             <p className="muted small pending">
-              Fills use the logged hourly closes (each hour opens at the previous close), so stops only see closes.
+              Orders fill when the hourly run actually asked Jev (often late), at a price estimated within that hour.
+              Stops only see hourly closes.
             </p>
           </section>
         </div>

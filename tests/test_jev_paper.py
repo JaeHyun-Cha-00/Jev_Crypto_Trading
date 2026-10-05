@@ -92,3 +92,38 @@ def test_entries_go_to_the_strongest_edge_not_alphabetical_order():
     bought = {a["symbol"]: a["size_frac"] for a in hour0 if a["action"] == "enter"}
     assert "ZZZ/USD" in bought and "MMM/USD" in bought
     assert bought.get("AAA/USD", 0) < bought["MMM/USD"]
+
+
+def _at(i, minute):
+    """ISO time `minute` minutes into hour i (T0 is 04:00 UTC)."""
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp((T0 + i * H) / 1000 + minute * 60, tz=timezone.utc).isoformat()
+
+
+def test_buy_fills_when_the_run_happened_at_the_interpolated_price():
+    # Hour 0's answer was logged by a run 30 minutes into hour 1 (GitHub started late).
+    rows = [dict(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), called_at=_at(1, 30))]
+    rows += [row("BTC/USD", 1, 110.0), row("BTC/USD", 2, 110.0)]
+    r = run(rows)
+    [p] = r["positions"]
+    assert p["entry_ts"] == T0 + H
+    # Halfway through hour 1: between its open (100) and close (110), plus 2bps slippage.
+    assert p["entry_price"] == pytest.approx(105.0 * 1.0002)
+
+
+def test_a_run_hours_late_fills_hours_later():
+    rows = [dict(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), called_at=_at(3, 0))]
+    rows += [row("BTC/USD", i, 100.0 + i) for i in range(1, 3)]
+    r = run(rows)
+    # The run that saw the answer had not happened by the last logged hour.
+    assert r["positions"] == [] and [p["kind"] for p in r["pending"]] == ["enter"]
+    assert r["pending"][0]["fill_after"] == T0 + 3 * H
+    r = run(rows + [row("BTC/USD", 3, 103.0), row("BTC/USD", 4, 104.0)])
+    [p] = r["positions"]
+    assert p["entry_ts"] == T0 + 3 * H and p["entry_price"] == pytest.approx(102.0 * 1.0002)
+
+
+def test_rows_without_called_at_fill_at_the_next_open():
+    rows = [dict(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), called_at=None), row("BTC/USD", 1, 104.0)]
+    [p] = run(rows)["positions"]
+    assert p["entry_ts"] == T0 + H and p["entry_price"] == pytest.approx(100.0 * 1.0002)

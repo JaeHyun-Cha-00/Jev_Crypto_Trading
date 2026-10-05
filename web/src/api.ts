@@ -140,7 +140,8 @@ export interface JevPaper {
   last_bar_ts: number | null;
   trades: Trade[];
   positions: Position[];
-  pending: { symbol: string; kind: string; reason: string; size_frac: number; ref_close: number }[];
+  /** fill_after: when the run that queued it happened (UTC ms); it fills once that hour is logged */
+  pending: { symbol: string; kind: string; reason: string; size_frac: number; ref_close: number; fill_after: number | null }[];
   curve: CurvePoint[];
   /** newest first, capped by ?actions= */
   actions: JevAction[];
