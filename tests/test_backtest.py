@@ -174,3 +174,32 @@ def test_cli_refuses_jev_without_flag(tmp_path):
     r = subprocess.run([sys.executable, "-m", "jevtrade.backtest", "--model", "jev"],
                        capture_output=True, text=True, cwd=tmp_path)
     assert r.returncode != 0 and "--allow-live-model" in r.stderr
+
+
+def test_baseline_exits_on_cross_back_not_max_hold():
+    df = frame(synthetic_candles(900, seed=11))
+    res = bt(BaselineModel(20, 50), cfg=BacktestConfig(fee_bps=0, slippage_bps=0)).run({"X": df})
+    assert res.trades and res.sizing["max_holding_bars"] is None
+    reasons = {t.exit_reason.split(":")[0] for t in res.trades}
+    assert "max_holding" not in reasons and "model_exit" in reasons
+    assert max(t.bars_held for t in res.trades) > 4
+
+
+def test_min_trade_interval_in_backtest():
+    df = frame(synthetic_candles(600, seed=1))
+    res = bt(MockModel(fixed=BULL), cfg=BacktestConfig(fee_bps=0, slippage_bps=0)).run({"X": df})
+    assert len(res.trades) > 2
+    for prev, nxt in zip(res.trades, res.trades[1:]):
+        # Re-entry is decided >= 4 bars after the exit bar and fills at the next open.
+        assert nxt.entry_ts - prev.exit_ts >= 5 * H
+
+
+def test_summary_shows_sizing(tmp_path):
+    df = frame(synthetic_candles(400, seed=3))
+    res = bt(MockModel(), cfg=BacktestConfig(output_dir=str(tmp_path))).run({"X": df})
+    s = summarize(res, H)
+    z = s["sizing"]
+    assert z["starting_balance"] == 10_000 and z["risk_per_trade"] == 0.01
+    assert z["max_position_frac"] == 0.5 and z["max_daily_loss_pct"] == 0.03
+    out = write_outputs(res, s, tmp_path)
+    assert "risk-based" in (out / "summary.md").read_text()

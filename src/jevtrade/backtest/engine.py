@@ -76,6 +76,7 @@ class BacktestResult:
     benchmark: dict[str, float]           # buy-and-hold return per symbol over the run
     counts: dict[str, int] = field(default_factory=dict)  # decisions, abstains, actions by kind
     contamination: str = "n/a"
+    sizing: dict = field(default_factory=dict)  # PolicyConfig.describe_sizing at the run's settings
 
 
 @dataclass
@@ -132,6 +133,8 @@ class Backtester:
     ):
         self.model = model
         self.questions = questions
+        # max_holding_bars can differ per model (baseline exits on its own signal).
+        policy_cfg = policy_cfg.for_model(model.name)
         self.policy = Policy(policy_cfg, tf_ms)
         self.pcfg = policy_cfg
         self.cfg = bt_cfg
@@ -203,7 +206,7 @@ class Backtester:
             trades.append(Trade(sym, o.pos.entry_ts, o.pos.entry_price, ts, px, o.pos.qty,
                                 fee + o.entry_fee, pnl, pnl / cost if cost else 0.0, bars,
                                 reason, o.entry_reason))
-            register_trade_result(risk, pnl, ts, self.tf_ms, self.pcfg)
+            register_trade_result(risk, pnl, ts, self.tf_ms, self.pcfg, sym)
 
         for ts in timeline:
             # The daily-loss baseline is equity at the previous close.
@@ -294,6 +297,7 @@ class Backtester:
             symbols=list(data), timeframe=self.timeframe, initial_equity=self.cfg.initial_equity,
             trades=trades, equity=eq, benchmark=bench, counts=counts,
             contamination=contamination_label(self.model.version, last_ts),
+            sizing=self.pcfg.describe_sizing(self.cfg.initial_equity),
         )
 
 

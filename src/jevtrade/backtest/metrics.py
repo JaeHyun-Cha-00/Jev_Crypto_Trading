@@ -67,6 +67,7 @@ def summarize(res: BacktestResult, tf_ms: int) -> dict:
         "exit_reasons": dict(exits),
         "counts": res.counts,
         "buy_and_hold_return": {s: _num(r) for s, r in res.benchmark.items()},
+        "sizing": res.sizing,
     }
 
 
@@ -105,6 +106,17 @@ def format_summary(s: dict) -> str:
         f"- Exits: {exits}",
         f"- Buy and hold: {bh}",
         f"- Counts: {json.dumps(s['counts'])}",
+        f"- Sizing: {format_sizing(s.get('sizing') or {})}",
         "",
     ]
     return "\n".join(lines)
+
+
+def format_sizing(z: dict) -> str:
+    if not z:
+        return "n/a"
+    hold = z["max_holding_bars"] if z["max_holding_bars"] is not None else "none (model exit)"
+    return (f"start {z['starting_balance']:,.2f}; {z['sizing_method']}; stop {z['stop_loss_pct']:.2%} "
+            f"→ {z['position_frac_at_stop']:.2%} of equity per position (cap {z['max_position_frac']:.0%}, "
+            f"gross cap {z['max_gross_exposure']:.0%}); max daily loss {z['max_daily_loss_pct']:.2%}; "
+            f"max hold {hold}; min {z['min_trade_interval_bars']} bars between exit and re-entry")
