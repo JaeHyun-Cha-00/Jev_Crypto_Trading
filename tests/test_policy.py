@@ -124,6 +124,15 @@ def test_model_exit(pol):
     assert a.kind == "exit" and a.reason.startswith("model_exit")
 
 
+def test_model_exit_needs_exit_edge():
+    p = Policy(PolicyConfig(exit_threshold=0.3, exit_min_edge=0.2, max_holding_bars=None), H)
+    pos = {SYM: Position(SYM, 10, 100.0, T0, 90.0)}
+    a = p.evaluate(SYM, T0 + H, 100.0, dec(up=0.25, down=0.4), acct(positions=pos))
+    assert a.kind == "hold" and "edge 0.150" in a.reason
+    a = p.evaluate(SYM, T0 + H, 100.0, dec(up=0.1, down=0.4), acct(positions=pos))
+    assert a.kind == "exit" and a.reason.startswith("model_exit")
+
+
 def test_max_daily_loss_blocks_entries(pol):
     a = pol.evaluate(SYM, T0, 100.0, dec(up=0.9), acct(equity=9_690, day_start=10_000))
     assert a.kind == "skip" and a.reason.startswith("max_daily_loss") and a.passed_threshold
