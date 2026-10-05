@@ -16,6 +16,7 @@ from .decision.base import DecisionConfig
 from .features.compute import FeatureConfig
 from .paper.engine import PaperConfig
 from .policy.engine import PolicyConfig
+from .report.daily import ReportConfig
 from .state.builder import StateConfig
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "default.yaml"
@@ -55,6 +56,7 @@ class AppConfig(BaseModel):
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
     paper: PaperConfig = Field(default_factory=PaperConfig)
+    report: ReportConfig = Field(default_factory=ReportConfig)
 
     @model_validator(mode="after")
     def _holding_follows_horizon(self) -> "AppConfig":

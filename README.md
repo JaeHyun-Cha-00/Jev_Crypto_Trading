@@ -25,7 +25,7 @@ trade, and when to exit. All risk limits live in code, never in prompts.
 | `src/jevtrade/policy/` | Probabilities → actions, risk limits | ✅ stage 3 |
 | `src/jevtrade/backtest/` | Event-driven walk-forward backtester | ✅ stage 4 |
 | `src/jevtrade/paper/` | Live paper loop, restart-safe, simulated fills only | ✅ stage 7 |
-| `report/` | Metrics and daily Markdown summary | planned |
+| `src/jevtrade/report/` | Daily Markdown report: account, trades, decisions, calibration | ✅ stage 8 |
 | `api/` | Read-only FastAPI | planned |
 | `web/` | React dashboard | planned |
 
@@ -287,6 +287,34 @@ User=jevtrade
 [Install]
 WantedBy=multi-user.target
 ```
+
+### 8. Daily report
+
+```bash
+python -m jevtrade.report                    # yesterday (UTC) for paper.run_id
+python -m jevtrade.report --day 2026-10-04   # a given day
+python -m jevtrade.report --run-id <backtest run id> --day 2026-10-04   # calibration of a backtest
+```
+
+Writes `reports/out/<run id>/<day>.md` and a `.json` twin, built only from
+the SQLite store, so rewriting a day gives the same file. The paper loop
+writes each day's report right after that day's last bar
+(`paper.daily_report`). A report has:
+- **Account:** equity at the day's open and close, day PnL, return since
+  start, max drawdown, bars processed (and any risk-only catch-up bars).
+- **Trades** closed that day, and **open positions** with stop, mark and
+  unrealized PnL.
+- **Decisions:** counts, abstains, actions, skip reasons, Jev cost, tokens
+  and latency.
+- **Calibration** of the `direction` probabilities against what happened
+  `horizon_bars` later, over every resolved decision of the run so far:
+  Brier score next to the Brier of always forecasting the realized base
+  rates (the bar to beat), log loss, top-choice hit rate, and a
+  reliability table for p(up).
+
+On Coinbase BTC/ETH since 2025, about 75% of 4-hour windows ended "flat"
+(within ±1%), and up and down were about 12.5% each. A model that rarely
+says flat is badly calibrated even if its up/down calls are informative.
 
 ## Evaluation validity
 

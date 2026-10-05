@@ -81,4 +81,9 @@ paper:                       # python -m jevtrade.paper run   (simulated fills o
   max_catchup_bars: 48       # after downtime, older missed bars run risk-only (stops, no new entries)
   stall_grace_bars: 3        # process a bar without a symbol whose candle is this late
   log_inputs: true           # keep each state text with its decision
+  daily_report: true         # write the report for each UTC day as its last bar is processed
   lock_path: null            # default: <sqlite_path>.paper.lock
+
+report:                      # python -m jevtrade.report [--day YYYY-MM-DD]
+  output_dir: reports/out    # <output_dir>/<run id>/<day>.md and .json (git-ignored)
+  buckets: 5                 # reliability buckets for p(up)

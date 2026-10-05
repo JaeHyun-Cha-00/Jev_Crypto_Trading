@@ -21,12 +21,14 @@ import os
 import signal
 import threading
 import time
+from datetime import date, datetime, timezone
 
 from ..config import load_config
 from ..data.fetcher import public_exchange
 from ..data.store import connect
 from ..data.timeframes import ms_to_iso, timeframe_ms
 from ..decision.factory import build_model
+from ..report.daily import write_report
 from .engine import PaperLock, PaperLockError, PaperTrader, seconds_until_next_close
 from .store import PaperStore
 
@@ -62,6 +64,9 @@ def _run(args) -> None:
                              f", {len(r.risk_only)} risk-only" if r.risk_only else "",
                              f"; waiting on {', '.join(r.waiting_on)}" if r.waiting_on else "",
                              f"{r.equity:,.2f}" if r.equity is not None else "n/a")
+                    if cfg.paper.daily_report:
+                        for day in completed_days(r.processed, tf_ms):
+                            log.info("wrote %s", write_report(conn, cfg, cfg.paper.run_id, day, cfg.report))
                     wait = seconds_until_next_close(int(time.time() * 1000), tf_ms, cfg.paper.poll_delay_s)
                     if r.waiting_on:
                         wait = min(wait, cfg.paper.retry_s)
@@ -76,6 +81,12 @@ def _run(args) -> None:
     except PaperLockError as e:
         raise SystemExit(str(e)) from None
     log.info("paper loop stopped")
+
+
+def completed_days(processed: list[int], tf_ms: int) -> list[date]:
+    """UTC days whose last bar is among `processed`."""
+    return sorted({datetime.fromtimestamp(ts / 1000, tz=timezone.utc).date()
+                   for ts in processed if (ts + tf_ms) % 86_400_000 == 0})
 
 
 def _status(args) -> None:
