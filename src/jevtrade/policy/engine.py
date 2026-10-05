@@ -5,7 +5,8 @@ it cannot open, size, or keep a position open against a limit. v1 is
 long-only spot (no shorting or leverage).
 
 Timing contract: `evaluate` runs on the close of bar t. The executor fills
-any resulting order at the open of bar t+1.
+any resulting order at the open of bar t+1, with one exception: a stop-loss
+exit carries `fill_price` and fills inside bar t (see `stop_fill`).
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ class PolicyConfig(BaseModel):
     exit_threshold: float = Field(0.55, gt=0, le=1)    # p(down) that triggers a model exit
     risk_per_trade: float = Field(0.01, gt=0, le=1)    # equity lost if the stop is hit
     stop_loss_pct: float = Field(0.03, gt=0, lt=1)
+    stop_slippage_bps: float = Field(5.0, ge=0, lt=10_000)  # adverse slippage on stop fills
     max_position_frac: float = Field(0.25, gt=0, le=1)  # per-symbol notional / equity
     max_gross_exposure: float = Field(0.50, gt=0, le=1)  # all positions / equity
     min_trade_frac: float = Field(0.01, gt=0, le=1)
@@ -83,11 +85,25 @@ class Action:
     reason: str
     size_frac: float = 0.0          # target notional / equity for "enter"
     stop_price: float | None = None  # set relative to the reference close; executor re-anchors to fill
+    fill_price: float | None = None  # stop exits only: fill inside this bar at this price, not next open
     passed_threshold: bool = False
     details: dict = field(default_factory=dict)
 
 
 DAY_MS = 86_400_000
+
+
+def stop_fill(stop_price: float, bar_open: float, bar_low: float, slippage_bps: float) -> float | None:
+    """Fill price for a long stop hit during a bar, or None if the bar never reached it.
+
+    The stop triggers on the bar's low, not its close. It fills at the stop
+    price, or at the open when the bar gapped through the stop, then slippage
+    is applied against the seller.
+    """
+    if bar_low > stop_price:
+        return None
+    base = bar_open if bar_open <= stop_price else stop_price
+    return base * (1 - slippage_bps / 10_000)
 
 
 def roll_day(risk: RiskState, ts_ms: int, equity: float) -> None:
@@ -115,8 +131,15 @@ class Policy:
         self.tf_ms = tf_ms
 
     def evaluate(
-        self, symbol: str, bar_ts: int, close: float, decision: Decision | None, acct: AccountView
+        self, symbol: str, bar_ts: int, close: float, decision: Decision | None, acct: AccountView,
+        *, bar_open: float | None = None, bar_low: float | None = None,
     ) -> Action:
+        """Decide what to do at the close of bar `bar_ts`.
+
+        Backtest and paper loops must pass `bar_open` and `bar_low` so stops
+        trigger on the bar's low. Without them the bar is treated as having
+        no range beyond its close.
+        """
         c = self.cfg
         usable = decision is not None and not decision.abstain
         p_up = decision.p(c.question, c.up_option) if usable else 0.0
@@ -126,9 +149,15 @@ class Policy:
         pos = acct.positions.get(symbol)
         if pos is not None:
             # Risk exits come first and do not depend on the model.
-            if close <= pos.stop_price:
-                return Action("exit", symbol, f"stop_loss: close {close:.6g} <= stop {pos.stop_price:.6g}",
-                              details=probs)
+            low = min(close, bar_low if bar_low is not None else close)
+            opened = bar_open if bar_open is not None else close
+            fill = stop_fill(pos.stop_price, opened, low, c.stop_slippage_bps)
+            if fill is not None:
+                how = "gap open" if opened <= pos.stop_price else "stop"
+                return Action("exit", symbol,
+                              f"stop_loss: low {low:.6g} <= stop {pos.stop_price:.6g}, "
+                              f"fill {fill:.6g} at {how} less {c.stop_slippage_bps:g}bps",
+                              fill_price=fill, details=probs)
             held = (bar_ts - pos.entry_ts) // self.tf_ms + 1
             if held >= c.max_holding_bars:
                 return Action("exit", symbol, f"max_holding: held {held} bars >= {c.max_holding_bars}",
