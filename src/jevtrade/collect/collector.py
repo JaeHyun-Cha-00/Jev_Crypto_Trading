@@ -156,6 +156,11 @@ def state_record(rec: dict, state_text: str) -> dict:
             "state": state_text}
 
 
+def lookback_bars(app_cfg, max_backfill: int) -> int:
+    """Candles to fetch so the oldest of `max_backfill` decision bars gets the full state window."""
+    return state_window(app_cfg.state, app_cfg.features) + max_backfill + _WARMUP_BARS
+
+
 def candles_frame(rows: list[list[float]]) -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
     df = df.drop_duplicates("ts").sort_values("ts")
@@ -250,7 +255,7 @@ class Collector:
 
     def fetch(self, symbol: str, latest: int) -> pd.DataFrame:
         d = self.cfg.data
-        lookback = self.window + self.max_backfill + _WARMUP_BARS
+        lookback = lookback_bars(self.cfg, self.max_backfill)
         rows = fetch_range(self.source, symbol, d.timeframe, latest - lookback * self.tf_ms,
                            latest, self.tf_ms, page_limit_for(d.exchange, d.page_limit),
                            skip_empty=has_deep_history(d.exchange))

@@ -220,3 +220,18 @@ def test_outcome_labels():
     assert o["direction"] == "up" and o["ret_pct"] == pytest.approx(1.5)
     assert o["adverse_move"] is True and o["min_low_pct"] == pytest.approx(-3.5)
     assert outcome_record(dec, df.iloc[:4], H, 4, 1.0, 3.0) is None
+
+
+def test_decision_cli_state_matches_the_collector(tmp_path):
+    """`python -m jevtrade.decision` must show Jev the same state the hourly log does."""
+    from jevtrade.collect.collector import StateLog
+    from jevtrade.decision.__main__ import _pretty, latest_state
+
+    c = _collector(tmp_path, Transport(), max_backfill=1, symbols=("BTC/USD",))
+    now = _now(N - 1)
+    c.run(now)
+    [logged] = StateLog(tmp_path / "state").read("2024-03-03")
+    candles, state = latest_state(c.cfg, MultiSource(), "BTC/USD", now)
+    assert int(candles.index[-1].value // 1_000_000) == logged["candle_ts"]
+    assert state.text == logged["state"]
+    assert _pretty("<html>502</html>") == "<html>502</html>"   # error pages print as-is
