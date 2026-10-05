@@ -48,7 +48,9 @@ def public_exchange(exchange_id: str) -> ccxt.Exchange:
     """Build an unauthenticated ccxt exchange client."""
     if not hasattr(ccxt, exchange_id):
         raise ValueError(f"unknown ccxt exchange: {exchange_id}")
-    ex = getattr(ccxt, exchange_id)({"enableRateLimit": True})
+    # requests_trust_env: honour HTTPS_PROXY / REQUESTS_CA_BUNDLE like any
+    # other HTTP client (ccxt ignores them by default).
+    ex = getattr(ccxt, exchange_id)({"enableRateLimit": True, "requests_trust_env": True})
     for field in _CREDENTIAL_FIELDS:
         if getattr(ex, field, None):
             raise RuntimeError(f"refusing exchange client with credential field {field!r} set")
