@@ -1,0 +1,94 @@
+# Default configuration. Secrets do NOT belong here — use environment
+# variables (see .env.example).
+
+data:
+  exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken (latest 720 candles only)
+  symbols: [BTC/USD, ETH/USD] # both exist on kraken too
+  timeframe: 1h
+  start: "2025-01-01T00:00:00Z" # backfilled on coinbase; kraken can't reach it
+  page_limit: 300            # clamped per exchange: coinbase 300, kraken 720
+  requests_trust_env: true   # use HTTPS_PROXY / REQUESTS_CA_BUNDLE from the environment
+
+storage:
+  sqlite_path: data/jevtrade.sqlite
+
+features:
+  return_windows: [1, 4, 24, 72]
+  vol_windows: [24, 72]
+  volume_z_window: 24
+  rsi_period: 14
+  ma_windows: [20, 50, 200]
+
+state:
+  history_bars: 24
+  percentile_window: 720
+  target_max_tokens: 2000
+
+decision:
+  model: mock                # mock | baseline | jev
+  horizon_bars: 4            # direction horizon: 4 bars = 4 hours on 1h candles
+  flat_band_pct: 1.0         # "up" > +1%, "down" < -1%, otherwise "flat"
+  adverse_move_pct: 3.0      # matches policy.stop_loss_pct; see docs/jev_prompt.md
+  mock_abstain_rate: 0.1
+  baseline_fast: 20
+  baseline_slow: 50
+  jev:                       # key comes from $OPENROUTER_API_KEY, never from YAML
+    provider: openrouter
+    base_url: https://openrouter.ai/api/v1
+    model: typesafe/jev-1.13-20260917   # pinned snapshot; aliases are rejected
+    api_key_env: OPENROUTER_API_KEY
+    timeout_s: 30
+    max_retries: 2
+    price_per_input_token_usd: 0.000000042   # $0.042 / Mtok input, output free
+
+policy:                      # all risk limits live here, enforced in code
+  entry_threshold: 0.55      # min p(up) to open a long
+  min_edge: 0.10             # min p(up) - p(down)
+  exit_threshold: 0.55       # p(down) that closes a long
+  # Sizing is risk-based: notional = equity x risk_per_trade / stop distance,
+  # capped at max_position_frac. With a 3% stop that is 33% of equity per position.
+  risk_per_trade: 0.01       # equity at risk if the stop is hit
+  stop_loss_pct: 0.03
+  stop_slippage_bps: 5       # stops trigger on the bar low; fill at stop (or gap open) less this
+  max_position_frac: 0.50    # per-symbol notional / equity
+  max_gross_exposure: 0.50
+  min_trade_frac: 0.01
+  max_daily_loss_pct: 0.03   # blocks new entries for the rest of the UTC day
+  cooldown_after_losses: 3
+  cooldown_bars: 24
+  min_trade_interval_bars: 4 # bars after an exit before the same symbol can re-enter
+  # max_holding_bars defaults to decision.horizon_bars (4); set it here to override.
+  max_holding_bars_by_model: # per decision model; null = no time exit
+    baseline: null           # exits when the SMA crosses back (or on the stop)
+
+backtest:                    # python -m jevtrade.backtest
+  initial_equity: 10000
+  fee_bps: 10                # per side, on notional
+  slippage_bps: 2            # entries and non-stop exits fill at the next open, moved this much against us
+  start: null                # first decision bar (ISO-8601 UTC); null = all stored data after warm-up
+  end: null
+  output_dir: data/backtests
+  log_decisions: true        # decisions table, under the run id
+  log_inputs: false          # also store each state text (~2KB per decision)
+
+paper:                       # python -m jevtrade.paper run   (simulated fills only, never real orders)
+  run_id: paper              # change it to start a fresh paper account; old rows are kept
+  initial_equity: 10000
+  fee_bps: 10                # same cost model as the backtest
+  slippage_bps: 2
+  poll_delay_s: 30           # after a candle closes, wait this long for the exchange to publish it
+  retry_s: 60                # after a failed step (network error), retry this soon
+  max_catchup_bars: 48       # after downtime, older missed bars run risk-only (stops, no new entries)
+  stall_grace_bars: 3        # process a bar without a symbol whose candle is this late
+  log_inputs: true           # keep each state text with its decision
+  daily_report: true         # write the report for each UTC day as its last bar is processed
+  lock_path: null            # default: <sqlite_path>.paper.lock
+
+report:                      # python -m jevtrade.report [--day YYYY-MM-DD]
+  output_dir: reports/out    # <output_dir>/<run id>/<day>.md and .json (git-ignored)
+  buckets: 5                 # reliability buckets for p(up)
+
+api:                         # python -m jevtrade.api   (GET only, database opened read-only)
+  host: 127.0.0.1            # 0.0.0.0 inside docker; keep it off the public internet
+  port: 8000
+  cors_origins: ["http://localhost:5173"]   # the dashboard's dev server

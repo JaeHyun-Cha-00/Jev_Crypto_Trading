@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Local data / runtime state
+/data/
+*.sqlite
+*.sqlite3
+*.db
+*.parquet
+/reports/out/
+
+# Node
+node_modules/
+web/dist/
+
+# Claude Code per-machine settings
+.claude/settings.local.json
+*.tsbuildinfo
