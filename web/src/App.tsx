@@ -3,7 +3,7 @@ import { get, getForwardRows, getForwardSummary, getJevPaper } from "./api";
 import type { Config, ForwardRow, ForwardSummary, JevPaper } from "./api";
 import { EquityChart } from "./EquityChart";
 import { ForwardLog } from "./ForwardLog";
-import { ago, fmtMoney, fmtPct, fmtPrice, fmtTime } from "./format";
+import { TZ, TZ_NAME, ago, fmtMoney, fmtPct, fmtPrice, fmtTime } from "./format";
 
 // Only Jev: its hourly forward calls (collect workflow, data-log branch) and the
 // paper account the policy would have run on them. Simulated fills, never real orders.
@@ -156,8 +156,8 @@ function Bought({ paper, symbol }: { paper: JevPaper | null; symbol: string }) {
         <div className="scroll"><table>
           <thead>
             <tr>
-              <th>Coin</th><th>Status</th><th>Bought (UTC)</th><th className="num">Buy price</th><th className="num">Size</th>
-              <th>Sold (UTC)</th><th className="num">Sell price</th><th className="num">P&amp;L</th>
+              <th>Coin</th><th>Status</th><th>Bought ({TZ})</th><th className="num">Buy price</th><th className="num">Size</th>
+              <th>Sold ({TZ})</th><th className="num">Sell price</th><th className="num">P&amp;L</th>
             </tr>
           </thead>
           <tbody>
@@ -268,6 +268,7 @@ export default function App() {
             <span className="badge" title="Simulated fills, never real orders">PAPER</span>
           </div>
           <span className="spacer" />
+          <span className="health tz" title={`Times are shown in your local time zone, ${TZ_NAME}`}>{TZ}</span>
           <Health lastCall={summary?.last_called_at ?? null} />
           <button className="icon-btn" onClick={load} aria-label="Refresh" title="Refresh">
             {Icon.refresh}
@@ -426,7 +427,7 @@ export default function App() {
               <div className="scroll">
                 <table>
                   <thead>
-                    <tr><th>Coin</th><th>Bought (UTC)</th><th>Sold (UTC)</th><th className="num">Hours</th><th className="num">Return</th><th className="num">PnL</th><th>Why sold</th></tr>
+                    <tr><th>Coin</th><th>Bought ({TZ})</th><th>Sold ({TZ})</th><th className="num">Hours</th><th className="num">Return</th><th className="num">PnL</th><th>Why sold</th></tr>
                   </thead>
                   <tbody>
                     {trades.slice(0, 100).map((t) => (
@@ -454,7 +455,7 @@ export default function App() {
             <div className="scroll">
               <table>
                 <thead>
-                  <tr><th>Hour (UTC)</th><th>Coin</th><th className="num">Price</th><th className="num">p(up)</th><th className="num">p(down)</th><th className="num">Odds</th><th>Action</th><th>Reason</th></tr>
+                  <tr><th>Hour ({TZ})</th><th>Coin</th><th className="num">Price</th><th className="num">p(up)</th><th className="num">p(down)</th><th className="num">Odds</th><th>Action</th><th>Reason</th></tr>
                 </thead>
                 <tbody>
                   {(activity === "buys" ? buys : actions).slice(0, 200).map((a) => {
@@ -483,7 +484,7 @@ export default function App() {
 
         <footer className="muted small">
           Read-only view of Jev's forward log. Refreshes every minute. Last logged hour{" "}
-          {paper?.last_bar_ts ? fmtTime(paper.last_bar_ts) : "n/a"} UTC.
+          {paper?.last_bar_ts ? fmtTime(paper.last_bar_ts) : "n/a"} {TZ}. All times are your local time ({TZ_NAME}).
         </footer>
       </main>
     </>

@@ -8,8 +8,36 @@ export const fmtPct = (v: number | null | undefined, signed = true) =>
 
 export const fmtPrice = (v: number) => (v >= 100 ? fmtMoney(v, 2) : v.toPrecision(5));
 
-/** UTC, matching the store and reports. */
-export const fmtTime = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace("T", " ");
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/** The viewer's local time, as YYYY-MM-DD HH:mm. The store and API stay in UTC. */
+export const fmtTime = (ms: number) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+/** Short name of the viewer's time zone right now, e.g. "PDT"; falls back to the UTC offset. */
+export const TZ = (() => {
+  try {
+    const part = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
+      .formatToParts(new Date())
+      .find((p) => p.type === "timeZoneName");
+    if (part) return part.value;
+  } catch {
+    /* no Intl */
+  }
+  const off = -new Date().getTimezoneOffset();
+  return `UTC${off >= 0 ? "+" : "-"}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`;
+})();
+
+/** Full zone name for the footer, e.g. "America/Los_Angeles". */
+export const TZ_NAME = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return TZ;
+  }
+})();
 
 export function ago(iso: string | null): { text: string; minutes: number } {
   if (!iso) return { text: "never", minutes: Infinity };
