@@ -150,7 +150,9 @@ forward_log:                 # the dashboard's "Jev forward log": the collect wo
   # Fresh start (candle open, UTC). The collect workflow never asks Jev about an
   # earlier candle (its backfill stops here), and the dashboard ignores earlier
   # lines, so the portfolio starts at its full balance from this hour. null: no cutoff.
-  start: "2026-10-05T06:00:00Z"
+  # 2026-10-05T17:00Z: restarted when the direction question moved from 4 hours
+  # and 1% to 24 hours and 3%; earlier lines answered the old question.
+  start: "2026-10-05T17:00:00Z"
 
 market:                      # the dashboard's live coin list and coin pages: public Coinbase data, no keys
   enabled: true
