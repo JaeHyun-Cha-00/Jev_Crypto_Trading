@@ -23,6 +23,17 @@ CREATE TABLE IF NOT EXISTS candles (
     volume    REAL    NOT NULL,
     PRIMARY KEY (exchange, symbol, timeframe, ts)
 );
+
+-- Gaps a sync already tried to backfill. Coinbase leaves out hours with no
+-- trades, so thin coins have gaps that never fill; each is fetched once.
+CREATE TABLE IF NOT EXISTS candle_gaps_tried (
+    exchange  TEXT    NOT NULL,
+    symbol    TEXT    NOT NULL,
+    timeframe TEXT    NOT NULL,
+    after_ts  INTEGER NOT NULL,  -- last candle before the gap
+    before_ts INTEGER NOT NULL,  -- first candle after the gap
+    PRIMARY KEY (exchange, symbol, timeframe, after_ts, before_ts)
+);
 """
 
 
@@ -72,6 +83,21 @@ class CandleStore:
             (exchange, symbol, timeframe),
         )
         return [r[0] for r in cur]
+
+    def tried_gaps(self, exchange: str, symbol: str, timeframe: str) -> set[tuple[int, int]]:
+        cur = self.conn.execute(
+            "SELECT after_ts, before_ts FROM candle_gaps_tried WHERE exchange=? AND symbol=? AND timeframe=?",
+            (exchange, symbol, timeframe),
+        )
+        return {(int(a), int(b)) for a, b in cur}
+
+    def mark_gaps_tried(self, exchange: str, symbol: str, timeframe: str,
+                        gaps: Iterable[tuple[int, int]]) -> None:
+        with self.conn:
+            self.conn.executemany(
+                "INSERT OR IGNORE INTO candle_gaps_tried VALUES (?,?,?,?,?)",
+                [(exchange, symbol, timeframe, a, b) for a, b in gaps],
+            )
 
     def load(
         self,
