@@ -8,6 +8,10 @@ Each logged row carries its candle's close, so a bar is approximated as:
 open = the previous hour's logged close (this candle's own close when the
 previous hour is missing), low = min(open, close). Stops therefore trigger
 on closes, not on intrabar dips.
+
+Within an hour, symbols are evaluated by edge (p_up - p_down), highest first,
+so when the exposure caps leave room for only a few entries the slots go to
+the coins Jev was most confident about, not the alphabetically first ones.
 """
 
 from __future__ import annotations
@@ -54,6 +58,13 @@ def _bars(rows: list[dict], tf_ms: int) -> dict[str, dict[int, Bar]]:
     return out
 
 
+def _edge(pcfg, d: Decision | None) -> float:
+    """p_up - p_down as the policy reads it; -inf when there is no usable answer."""
+    if d is None or d.abstain:
+        return float("-inf")
+    return d.p(pcfg.question, pcfg.up_option) - d.p(pcfg.question, pcfg.down_option)
+
+
 def _trade(t: Trade) -> dict:
     return {"symbol": t.symbol, "entry_ts": t.entry_ts, "entry_price": t.entry_price, "exit_ts": t.exit_ts,
             "exit_price": t.exit_price, "qty": t.qty, "fees": t.fees, "pnl": t.pnl, "ret": t.ret,
@@ -88,9 +99,12 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
         sim.begin_bar(st, ts)
         now = {s: b[ts] for s, b in bars.items() if ts in b}
         trades += sim.fill_pending(st, ts, now)
-        for sym in sorted(now):
+        hour = {}
+        for sym in now:
             row = decisions.get((sym, ts))
-            d = _decision(row) if row else None
+            hour[sym] = (row, _decision(row) if row else None)
+        for sym in sorted(hour, key=lambda s: (-_edge(pcfg, hour[s][1]), s)):
+            row, d = hour[sym]
             action, trade = sim.on_close(st, sym, ts, now[sym], d)
             counts[action.kind] += 1
             if trade is not None:

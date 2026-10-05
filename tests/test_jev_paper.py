@@ -78,3 +78,17 @@ def test_many_symbols_replay_quickly():
     r = run(rows)
     assert time.perf_counter() - t < 5
     assert r["calls"] == 81 * 48 and len(r["per_symbol"]) == 81
+
+
+def test_entries_go_to_the_strongest_edge_not_alphabetical_order():
+    # Caps leave room for less than three full positions; the weakest signal must lose out.
+    rows = [row("AAA/USD", 0, 10.0, up=0.56, down=0.40),   # edge 0.16
+            row("MMM/USD", 0, 10.0, up=0.70, down=0.05),   # edge 0.65
+            row("ZZZ/USD", 0, 10.0, up=0.80, down=0.00)]   # edge 0.80
+    rows += [row(s, 1, 10.0) for s in ("AAA/USD", "MMM/USD", "ZZZ/USD")]
+    r = run(rows)
+    hour0 = [a for a in reversed(r["actions"]) if a["bar_ts"] == T0]
+    assert [a["symbol"] for a in hour0] == ["ZZZ/USD", "MMM/USD", "AAA/USD"]
+    bought = {a["symbol"]: a["size_frac"] for a in hour0 if a["action"] == "enter"}
+    assert "ZZZ/USD" in bought and "MMM/USD" in bought
+    assert bought.get("AAA/USD", 0) < bought["MMM/USD"]
