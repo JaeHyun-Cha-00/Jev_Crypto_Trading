@@ -11,6 +11,12 @@ A candle counts as done once Jev answered it, or abstained on a response it
 did send. Only calls that got no response at all (network errors, 5xx after
 retries) are logged with status "error" and asked again on a later run.
 
+The state text Jev was shown (a few KB per call, most of a decision line's
+size) goes to `<out>/state/<YYYY-MM-DD>.jsonl.gz` instead, keyed by `symbol`,
+`candle_ts` and `input_hash`. Each run appends one gzip member per symbol, so
+the file only grows at the end and git stores each hour as a small delta.
+Decision lines written before this split still carry `state` inline.
+
 Once a decision's horizon has closed, the realized outcome (close-to-close
 change, direction label, deepest dip below the decision close) goes to
 `<out>/outcomes/<YYYY-MM-DD>.jsonl`, keyed the same way. Nothing here trades
@@ -19,6 +25,7 @@ or simulates positions.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import logging
@@ -52,6 +59,9 @@ Nothing here trades or simulates positions.
   (Jev responded but the answer was unusable) or `error` (no response; that
   candle is asked again on a later run). `answers` holds every answer as Jev
   returned it; a Noul's `noul` is P(yes).
+- `state/YYYY-MM-DD.jsonl.gz`: the state text Jev was shown for each call,
+  keyed by `symbol`, `candle_ts` and `input_hash` (gzip; `zcat` reads it).
+  Decision lines from before 2026-10-05 still carry it inline as `state`.
 - `outcomes/YYYY-MM-DD.jsonl`: the realized outcome of each decision once its
   horizon has closed, keyed by `symbol` and `candle_ts`.
 """
@@ -111,6 +121,41 @@ class JsonlLog:
             f.write(json.dumps(rec, separators=(",", ":")) + "\n")
 
 
+class StateLog:
+    """Day-partitioned gzip JSONL of the state text behind each decision.
+
+    Appends a gzip member per batch; readers (`gzip`, `zcat`) see one stream.
+    """
+
+    def __init__(self, root: Path):
+        self.root = root
+
+    def path(self, ts_ms: int) -> Path:
+        return self.root / f"{_day(ts_ms)}.jsonl.gz"
+
+    def append(self, recs: list[dict]) -> None:
+        by_day: dict[Path, list[dict]] = {}
+        for r in recs:
+            by_day.setdefault(self.path(r["candle_ts"]), []).append(r)
+        for p, rs in by_day.items():
+            p.parent.mkdir(parents=True, exist_ok=True)
+            body = "".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rs)
+            # mtime=0 keeps the bytes reproducible for the same input.
+            with p.open("ab") as f:
+                f.write(gzip.compress(body.encode(), mtime=0))
+
+    def read(self, day: str) -> list[dict]:
+        p = self.root / f"{day}.jsonl.gz"
+        if not p.exists():
+            return []
+        return [json.loads(line) for line in gzip.decompress(p.read_bytes()).decode().splitlines() if line.strip()]
+
+
+def state_record(rec: dict, state_text: str) -> dict:
+    return {"symbol": rec["symbol"], "candle_ts": rec["candle_ts"], "input_hash": rec["input_hash"],
+            "state": state_text}
+
+
 def candles_frame(rows: list[list[float]]) -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
     df = df.drop_duplicates("ts").sort_values("ts")
@@ -119,7 +164,8 @@ def candles_frame(rows: list[list[float]]) -> pd.DataFrame:
 
 
 def decision_record(symbol: str, ts: int, close: float, d: Decision, qhash: str,
-                    state_text: str, called_at_ms: int) -> dict:
+                    called_at_ms: int) -> dict:
+    """One decision line; the state text goes to `StateLog` (see `state_record`)."""
     if not d.abstain:
         status = "answered"
     elif (d.abstain_reason or "").startswith("request failed"):
@@ -147,7 +193,6 @@ def decision_record(symbol: str, ts: int, close: float, d: Decision, qhash: str,
         "attempts": x.get("attempts"),
         "generation_id": x.get("generation_id"),
         "input_hash": d.input_hash,
-        "state": state_text,
         # Keep the body only when it explains a failure; answers carry the rest.
         "raw_response": d.raw_output if d.abstain else None,
     }
@@ -200,6 +245,7 @@ class Collector:
         self.qhash = questions_hash(self.questions)
         self.decisions = JsonlLog(self.out / "decisions")
         self.outcomes = JsonlLog(self.out / "outcomes")
+        self.states = StateLog(self.out / "state")
         self.window = state_window(app_cfg.state, app_cfg.features)
 
     def fetch(self, symbol: str, latest: int) -> pd.DataFrame:
@@ -217,7 +263,7 @@ class Collector:
         horizon = self.cfg.decision.horizon_bars
         self.out.mkdir(parents=True, exist_ok=True)
         readme = self.out / "README.md"
-        if not readme.exists():
+        if not readme.exists() or readme.read_text() != README:
             readme.write_text(README)
 
         # Decisions old enough to still be waiting on an outcome are re-read too.
@@ -241,26 +287,11 @@ class Collector:
                 continue
             feats = compute_features(df, self.cfg.features)
             pos = {int(ix.value // 1_000_000): i for i, ix in enumerate(df.index)}
-            for ts in range(first, latest + 1, self.tf_ms):
-                if (sym, ts) in done or ts not in pos:
-                    continue
-                i = pos[ts]
-                lo = max(0, i + 1 - self.window)
-                state = build_state(df.iloc[lo:i + 1], feats.iloc[lo:i + 1], horizon,
-                                    self.cfg.data.timeframe, self.cfg.state, self.cfg.features)
-                if state is None:
-                    log.warning("%s %s: not enough history for a state", sym, ms_to_iso(ts))
-                    continue
-                d = self.model.decide(state, self.questions)
-                rec = decision_record(sym, ts, float(df["close"].iloc[i]), d, self.qhash,
-                                      state.text, int(time.time() * 1000))
-                self.decisions.append(rec)
-                logged.append(rec)
-                res.called.append((sym, ts))
-                res.cost_usd += d.cost_usd
-                if rec["status"] == "error":
-                    res.errors.append((sym, ts))
-                log.info("%s %s: %s", sym, rec["candle_open"], rec["status"])
+            states: list[dict] = []
+            try:
+                self._decide(sym, df, feats, pos, first, latest, done, logged, states, res)
+            finally:   # whatever was asked before a failure keeps its state
+                self.states.append(states)
 
             for rec in logged:
                 key = (rec["symbol"], rec["candle_ts"])
@@ -273,3 +304,29 @@ class Collector:
                     have_outcome.add(key)
                     res.outcomes.append(key)
         return res
+
+    def _decide(self, sym: str, df: pd.DataFrame, feats, pos: dict[int, int], first: int, latest: int,
+                done: set, logged: list[dict], states: list[dict], res: CollectResult) -> None:
+        """Ask Jev about every candle of `sym` in [first, latest] not yet answered."""
+        horizon = self.cfg.decision.horizon_bars
+        for ts in range(first, latest + 1, self.tf_ms):
+            if (sym, ts) in done or ts not in pos:
+                continue
+            i = pos[ts]
+            lo = max(0, i + 1 - self.window)
+            state = build_state(df.iloc[lo:i + 1], feats.iloc[lo:i + 1], horizon,
+                                self.cfg.data.timeframe, self.cfg.state, self.cfg.features)
+            if state is None:
+                log.warning("%s %s: not enough history for a state", sym, ms_to_iso(ts))
+                continue
+            d = self.model.decide(state, self.questions)
+            rec = decision_record(sym, ts, float(df["close"].iloc[i]), d, self.qhash,
+                                  int(time.time() * 1000))
+            self.decisions.append(rec)
+            states.append(state_record(rec, state.text))
+            logged.append(rec)
+            res.called.append((sym, ts))
+            res.cost_usd += d.cost_usd
+            if rec["status"] == "error":
+                res.errors.append((sym, ts))
+            log.info("%s %s: %s", sym, rec["candle_open"], rec["status"])

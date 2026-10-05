@@ -78,8 +78,35 @@ def test_first_run_backfills_24_candles_per_symbol(tmp_path):
     assert r["status"] == "answered" and r["served_model"] == "typesafe/jev-1.13-20260917"
     assert set(r["answers"]) == {"direction", "regime", "adverse_move", "clear_signal"}
     assert r["answers"]["adverse_move"]["noul"] == 0.32
-    assert r["state"] and r["raw_response"] is None and r["cost_usd"] > 0
+    assert "state" not in r and r["raw_response"] is None and r["cost_usd"] > 0
     assert (tmp_path / "README.md").exists()
+
+
+def test_state_text_goes_to_a_gzip_file_beside_the_decisions(tmp_path):
+    c = _collector(tmp_path, Transport())
+    c.run(_now(1200))
+    recs = _decisions(tmp_path)
+    states = [s for p in sorted((tmp_path / "state").glob("*.jsonl.gz")) for s in c.states.read(p.name[:10])]
+    assert {(s["symbol"], s["candle_ts"], s["input_hash"]) for s in states} == \
+        {(r["symbol"], r["candle_ts"], r["input_hash"]) for r in recs}
+    assert all(len(s["state"]) > 500 for s in states)
+    # Decision lines stay small without the state text.
+    assert max(len(json.dumps(r)) for r in recs) < 2000
+    # The next hour appends a gzip member; the earlier ones still read.
+    before = len(states)
+    _collector(tmp_path, Transport()).run(_now(1201))
+    after = [s for p in sorted((tmp_path / "state").glob("*.jsonl.gz")) for s in c.states.read(p.name[:10])]
+    assert len(after) == before + 2 and after[:before] == states
+
+
+def test_old_decision_lines_with_inline_state_still_count_as_done(tmp_path):
+    _collector(tmp_path, Transport()).run(_now(1200))
+    for p in (tmp_path / "decisions").glob("*.jsonl"):   # rewrite as the pre-split format
+        lines = [dict(json.loads(line), state="old inline state") for line in p.read_text().splitlines()]
+        p.write_text("".join(json.dumps(r) + "\n" for r in lines))
+    t = Transport()
+    _collector(tmp_path, t).run(_now(1200) + 20 * 60_000)
+    assert t.calls == 0
 
 
 def test_rerun_in_the_same_hour_calls_nothing(tmp_path):
