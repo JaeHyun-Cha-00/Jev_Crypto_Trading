@@ -21,7 +21,7 @@ trade, and when to exit. All risk limits live in code, never in prompts.
 | `src/jevtrade/data/` | Public OHLCV via ccxt → SQLite, incremental, gap detection, UTC | ✅ stage 1 |
 | `src/jevtrade/features/` | Closed-candle features, no look-ahead | ✅ stage 2 |
 | `src/jevtrade/state/` | Anonymized JSON market state for the model | ✅ stage 3 |
-| `src/jevtrade/decision/` | `DecisionModel`: Mock ✅, Baseline ✅, Jev (pending docs) | ✅ stage 3 (partial) |
+| `src/jevtrade/decision/` | `DecisionModel`: Mock, Baseline, Jev (via OpenRouter) | ✅ stage 3 |
 | `src/jevtrade/policy/` | Probabilities → actions, risk limits | ✅ stage 3 |
 | `src/jevtrade/backtest/` | Event-driven walk-forward backtester | ✅ stage 4 |
 | `src/jevtrade/paper/` | Live paper loop, restart-safe, simulated fills only | ✅ stage 7 |
@@ -47,7 +47,7 @@ Requires Python 3.11 or newer.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'   # or '.[api]' for just the runtime plus the API server
-cp .env.example .env   # only needed once the JevModel stage lands
+cp .env.example .env   # only needed for decision.model: jev, or a private repo's forward log
 pytest
 ```
 
