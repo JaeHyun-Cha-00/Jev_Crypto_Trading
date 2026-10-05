@@ -49,10 +49,11 @@ ignores), never from YAML.
 
 ```yaml
 data:
-  exchange: binance          # any ccxt exchange id with public OHLCV
+  exchange: coinbase         # any ccxt exchange id with public OHLCV
   symbols: [BTC/USDT, ETH/USDT]
   timeframe: 1h
   start: "2024-01-01T00:00:00Z"   # first candle fetched into an empty store
+  page_limit: 300            # candles per request (coinbase max)
 storage:
   sqlite_path: data/jevtrade.sqlite
 ```
@@ -71,6 +72,9 @@ python -m jevtrade.data            # sync all configured symbols up to the last 
 - Gaps between stored candles are detected and backfilled once. Gaps that
   remain are real exchange gaps (for example, maintenance). They are logged
   and reported, never interpolated.
+- The default exchange is Coinbase (public Advanced Trade candles, max 300
+  per request). Kraken was not chosen because its public OHLC endpoint returns
+  only the most recent 720 candles, so it can't backfill history.
 - All timestamps are candle open times in UTC epoch milliseconds. DataFrames
   use a tz-aware UTC index.
 

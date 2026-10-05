@@ -26,7 +26,7 @@ def test_no_order_placement_code():
 
 
 def test_public_exchange_has_no_credentials():
-    ex = public_exchange("binance")
+    ex = public_exchange("coinbase")
     assert not ex.apiKey and not ex.secret
 
 

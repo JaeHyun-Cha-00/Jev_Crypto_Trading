@@ -15,13 +15,13 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "default.
 
 
 class DataConfig(BaseModel):
-    exchange: str = "binance"
+    exchange: str = "coinbase"
     symbols: list[str] = Field(default_factory=lambda: ["BTC/USDT", "ETH/USDT"])
     timeframe: str = "1h"
     # First candle to fetch on an empty store (ISO-8601, UTC).
     start: str = "2024-01-01T00:00:00Z"
-    # Max candles per request; exchanges cap this (binance: 1000).
-    page_limit: int = 1000
+    # Max candles per request; exchanges cap this (coinbase: 300).
+    page_limit: int = 300
 
     @field_validator("symbols")
     @classmethod

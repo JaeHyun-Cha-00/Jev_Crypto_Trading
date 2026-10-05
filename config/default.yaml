@@ -2,11 +2,11 @@
 # variables (see .env.example).
 
 data:
-  exchange: binance          # any ccxt exchange id with public OHLCV
+  exchange: coinbase         # any ccxt exchange id with public OHLCV
   symbols: [BTC/USDT, ETH/USDT]
   timeframe: 1h
   start: "2024-01-01T00:00:00Z"
-  page_limit: 1000
+  page_limit: 300            # coinbase max per request
 
 storage:
   sqlite_path: data/jevtrade.sqlite
