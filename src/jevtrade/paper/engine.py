@@ -5,7 +5,10 @@ not in a hosted notebook or chat session. Every step:
 
 1. Syncs public candles up to the last closed bar (public endpoints only).
 2. Finds bars after the last processed one. A bar is ready once every
-   symbol has a candle at or after it, or `stall_grace_bars` have passed.
+   symbol it holds (or has an order queued for) has a candle at or after it,
+   or `stall_grace_bars` have passed. A flat coin with no candle yet is not
+   waited for: Coinbase publishes no candle for an hour without trades, and
+   a coin the account doesn't hold has nothing to protect that hour.
 3. Processes each ready bar through the same `Simulator` the backtest uses,
    in one SQLite transaction: fills, decisions, trades, equity and state
    commit together. A crash mid-bar rolls the whole bar back and the next
@@ -55,7 +58,7 @@ class PaperConfig(BaseModel):
     poll_delay_s: float = Field(30.0, ge=0)   # wait after a candle closes before syncing
     retry_s: float = Field(60.0, gt=0)        # wait after a failed step
     max_catchup_bars: int = Field(48, ge=1)   # missed bars beyond this are processed risk-only
-    stall_grace_bars: int = Field(3, ge=0)    # process a bar without a lagging symbol after this
+    stall_grace_bars: int = Field(1, ge=0)    # process a bar without a lagging held symbol after this
     log_inputs: bool = True                   # store each state text with its decision
     daily_report: bool = True                 # write the report for each UTC day as it ends
     lock_path: str | None = None              # default: <sqlite_path>.paper.lock
@@ -179,7 +182,9 @@ class PaperTrader:
         timeline = sorted({t for _, _, rows in data.values() for t in rows if st.last_bar_ts < t <= latest})
         newest = {s: max(rows) for s, (_, _, rows) in data.items()}
         for n, ts in enumerate(timeline):
-            late = [s for s in self.cfg.data.symbols if newest.get(s, -1) < ts]
+            # Only coins with a position or a queued order are worth waiting for.
+            late = [s for s in self.cfg.data.symbols
+                    if newest.get(s, -1) < ts and (s in st.open or s in st.pending)]
             if late and latest - ts < self.pcfg.stall_grace_bars * self.tf_ms:
                 res.waiting_on = late
                 break  # wait for the lagging candle rather than skip that symbol's bar

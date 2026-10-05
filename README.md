@@ -277,9 +277,12 @@ model is Jev.
 - A fresh run starts at the latest closed bar with `paper.initial_equity`;
   it doesn't replay history. Changing the decision model of an existing run
   is refused; set `paper.run_id` to start a new paper account.
-- If one symbol's candle is late, the loop waits for it (retrying every
-  `retry_s`). After `stall_grace_bars` it processes the bar without that
-  symbol.
+- If a coin the account holds (or has an order queued for) has no candle
+  yet, the loop waits for it, retrying every `retry_s`, for at most
+  `stall_grace_bars` (1) bars, then processes the bar without it. A flat
+  coin with no candle is skipped for that bar without waiting: Coinbase
+  publishes no candle for an hour without trades, and a coin it doesn't
+  hold has nothing to protect.
 - `decision.model: jev` needs `--allow-live-model` or
   `JEVTRADE_ALLOW_LIVE_MODEL=1`, because it calls the paid API once per
   symbol per bar.
