@@ -5,7 +5,10 @@ Nothing here trades or simulates positions.
 
 - `decisions/YYYY-MM-DD.jsonl`: one line per Jev call, per symbol and closed 1h
   candle (day = the candle's open time, UTC), with that candle's `open`, `high`,
-  `low`, `close` and `volume` (base units; older lines have only `close`) and `called_at`, when the call was made. `status` is `answered`, `abstain`
+  `low`, `close` and `volume` (base units; older lines have only `close`) and `called_at`, when the call was made.
+  Lines for the newest candle of a run also carry Robinhood's quote for the
+  coin at the start of that run: `rh_bid`, `rh_ask` and `rh_quote_at`
+  (absent when Robinhood couldn't be read). `status` is `answered`, `abstain`
   (Jev responded but the answer was unusable) or `error` (no response; that
   candle is asked again on a later run). `answers` holds every answer as Jev
   returned it; a Noul's `noul` is P(yes).
