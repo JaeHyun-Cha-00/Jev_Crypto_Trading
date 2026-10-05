@@ -12,33 +12,10 @@ export interface Position {
   entry_reason: string;
 }
 
-export interface Status {
-  run_id: string;
-  model: string;
-  model_version: string;
-  started_at: string;
-  updated_at: string;
-  heartbeat_at: string | null;
-  last_bar_ts: number;
-  equity: number;
-  cash: number;
-  initial_equity: number;
-  total_return: number;
-  drawdown: number;
-  trades: number;
-  realized_pnl: number;
-  win_rate: number | null;
-  risk: { day_start_equity: number; day_return: number; consecutive_losses: number; cooldown_until_ts: number };
-  positions: Position[];
-  pending: { symbol: string; kind: string; reason: string; size_frac: number }[];
-}
-
-export interface EquityPoint {
+export interface CurvePoint {
   bar_ts: number;
   equity: number;
-  cash: number;
-  exposure: number;
-  mode: string;
+  cash?: number;
 }
 
 export interface Trade {
@@ -53,40 +30,16 @@ export interface Trade {
   ret: number;
   bars_held: number;
   exit_reason: string;
-}
-
-export interface Decision {
-  id: number;
-  symbol: string;
-  bar_ts: number;
-  model_version: string;
-  probs: Record<string, Record<string, number>>;
-  abstain: number;
-  abstain_reason: string | null;
-  cost_usd: number | null;
-  policy_action: string | null;
-  policy_reason: string | null;
+  entry_reason: string;
 }
 
 export interface Config {
   exchange: string;
   symbols: string[];
   timeframe: string;
-  model: string;
   horizon_bars: number;
   flat_band_pct: number;
   sizing: Record<string, number | string | null>;
-}
-
-export interface BacktestRow {
-  run_id: string;
-  model: string;
-  start: string;
-  end: string;
-  total_return: number;
-  max_drawdown: number;
-  sharpe: number | null;
-  trades: number;
 }
 
 // Jev forward log (the collect workflow's data-log branch): /api/forward/*
@@ -162,9 +115,43 @@ export interface ForwardRow {
   hit: boolean | null;
 }
 
+/** Jev's simulated account: the policy and simulator replayed over the logged answers (/api/forward/paper). */
+export interface JevAction {
+  symbol: string;
+  bar_ts: number;
+  close: number;
+  status: "answered" | "abstain" | "error" | null;
+  p_up: number;
+  p_down: number;
+  action: "enter" | "exit" | "hold" | "skip";
+  reason: string;
+  size_frac: number;
+}
+
+export interface JevPaper {
+  initial_equity: number;
+  fee_bps: number;
+  slippage_bps: number;
+  policy: { entry_threshold: number; min_edge: number; exit_threshold: number; stop_loss_pct: number; max_holding_bars: number | null };
+  equity: number;
+  cash: number;
+  total_return: number;
+  drawdown: number;
+  last_bar_ts: number | null;
+  trades: Trade[];
+  positions: Position[];
+  pending: { symbol: string; kind: string; reason: string; size_frac: number; ref_close: number }[];
+  curve: CurvePoint[];
+  /** newest first */
+  actions: JevAction[];
+  counts: Partial<Record<JevAction["action"], number>>;
+  per_symbol: Record<string, { trades: number; pnl: number; buys: number }>;
+}
+
 export const getForwardSummary = () => get<ForwardSummary>("/forward/summary");
 export const getForwardRows = (params: { symbol?: string; limit?: number } = {}) =>
   get<ForwardRow[]>("/forward/rows", params);
+export const getJevPaper = (actions = 300) => get<JevPaper>("/forward/paper", { actions });
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {

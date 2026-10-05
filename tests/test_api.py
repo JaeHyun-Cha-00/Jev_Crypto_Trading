@@ -150,3 +150,18 @@ def test_forward_off(env):
     off.forward_log.source = "off"
     s = TestClient(create_app(off)).get("/api/forward/summary").json()
     assert s["source"] == "off" and s["error"] is None and s["overall"]["scored"] == 0
+
+
+def test_forward_paper_replays_logged_answers(env):
+    from jevtrade.api.forward import ForwardLog
+    from jevtrade.api.settings import ForwardLogConfig
+    from test_forward import FakeGitHub
+
+    cfg, _ = env
+    fwd = ForwardLog(ForwardLogConfig(source="github", repo="me/repo"), http_get=FakeGitHub())
+    c = TestClient(create_app(cfg, forward_log=fwd))
+    r = c.get("/api/forward/paper").json()
+    assert r["initial_equity"] == cfg.paper.initial_equity and r["last_bar_ts"] is not None
+    assert {a["symbol"] for a in r["actions"]} <= {"BTC/USD", "ETH/USD"}
+    assert len(c.get("/api/forward/paper", params={"actions": 1}).json()["actions"]) == 1
+    assert c.post("/api/forward/paper").status_code == 405

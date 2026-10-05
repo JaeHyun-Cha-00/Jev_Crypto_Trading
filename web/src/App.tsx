@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, get, getForwardRows, getForwardSummary } from "./api";
-import type { BacktestRow, Config, Decision, EquityPoint, ForwardRow, ForwardSummary, Status, Trade } from "./api";
+import { get, getForwardRows, getForwardSummary, getJevPaper } from "./api";
+import type { Config, ForwardRow, ForwardSummary, JevPaper } from "./api";
 import { EquityChart } from "./EquityChart";
 import { ForwardLog } from "./ForwardLog";
 import { ago, fmtMoney, fmtPct, fmtPrice, fmtTime } from "./format";
+
+// Only Jev: its hourly forward calls (collect workflow, data-log branch) and the
+// paper account the policy would have run on them. Simulated fills, never real orders.
 
 const REFRESH_MS = 60_000;
 const RANGES = [
@@ -15,22 +18,28 @@ const RANGES = [
 type RangeId = (typeof RANGES)[number]["id"];
 
 interface Data {
-  status: Status | null;
   config: Config | null;
-  equity: EquityPoint[];
-  trades: Trade[];
-  decisions: Decision[];
-  reports: string[];
-  backtests: BacktestRow[];
-}
-
-const empty: Data = { status: null, config: null, equity: [], trades: [], decisions: [], reports: [], backtests: [] };
-
-interface Forward {
+  paper: JevPaper | null;
   summary: ForwardSummary | null;
   rows: ForwardRow[];
-  error: string | null;
 }
+
+const empty: Data = { config: null, paper: null, summary: null, rows: [] };
+
+/** Live while the hourly collector has called Jev recently. */
+function Health({ lastCall }: { lastCall: string | null }) {
+  const hb = ago(lastCall);
+  const ok = hb.minutes < 90;
+  return (
+    <span className={`health ${ok ? "good" : "warning"}`} role="status" title={`last Jev call ${hb.text}`}>
+      <span className="pip" aria-hidden="true" />
+      {ok ? "Live" : "No recent Jev call"}
+      <span className="label"> · {hb.text}</span>
+    </span>
+  );
+}
+
+const ACTION_LABEL: Record<string, string> = { enter: "buy", exit: "sell", hold: "hold", skip: "pass" };
 
 function Tile({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: "up" | "down" }) {
   return (
@@ -39,18 +48,6 @@ function Tile({ label, value, sub, tone }: { label: string; value: string; sub?:
       <div className={`tile-value ${tone ?? ""}`}>{value}</div>
       {sub && <div className="tile-sub">{sub}</div>}
     </div>
-  );
-}
-
-function Health({ status }: { status: Status | null }) {
-  const hb = ago(status?.heartbeat_at ?? null);
-  const ok = hb.minutes < 90;
-  return (
-    <span className={`health ${ok ? "good" : "warning"}`} role="status" title={`heartbeat ${hb.text}`}>
-      <span className="pip" aria-hidden="true" />
-      {ok ? "Live" : "Loop not seen"}
-      <span className="label"> · {hb.text}</span>
-    </span>
   );
 }
 
@@ -140,35 +137,21 @@ export default function App() {
   const [data, setData] = useState<Data>(empty);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [range, setRange] = useState<RangeId>("7d");
+  const [range, setRange] = useState<RangeId>("all");
   const [symbol, setSymbol] = useState<string>("");
-  const [report, setReport] = useState<{ day: string; markdown: string } | null>(null);
-  const [forward, setForward] = useState<Forward>({ summary: null, rows: [], error: null });
-  const [activity, setActivity] = useState<"trades" | "decisions">("trades");
+  const [activity, setActivity] = useState<"buys" | "trades" | "calls">("buys");
   const [theme, toggleTheme] = useTheme();
 
   const load = useCallback(async () => {
     setLoading(true);
-    // The forward log is independent of the paper account: its failures stay in its own section.
-    Promise.all([getForwardSummary(), getForwardRows({ limit: 300 })])
-      .then(([summary, rows]) => setForward({ summary, rows, error: null }))
-      .catch((e) => setForward((f) => ({ ...f, error: e instanceof Error ? e.message : String(e) })));
     try {
-      const [config, equity, trades, decisions, reports, backtests] = await Promise.all([
+      const [config, paper, summary, rows] = await Promise.all([
         get<Config>("/config"),
-        get<EquityPoint[]>("/paper/equity", { limit: 100_000 }),
-        get<Trade[]>("/paper/trades", { limit: 200 }),
-        get<Decision[]>("/decisions", { limit: 60 }),
-        get<{ days: string[] }>("/reports"),
-        get<BacktestRow[]>("/backtests"),
+        getJevPaper(500),
+        getForwardSummary(),
+        getForwardRows({ limit: 300 }),
       ]);
-      let status: Status | null = null;
-      try {
-        status = await get<Status>("/paper/status");
-      } catch (e) {
-        if (!(e instanceof ApiError && e.status === 404)) throw e;
-      }
-      setData({ status, config, equity, trades, decisions, reports: reports.days, backtests });
+      setData({ config, paper, summary, rows });
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -183,18 +166,22 @@ export default function App() {
     return () => clearInterval(id);
   }, [load]);
 
-  const openReport = async (day: string) => {
-    const r = await get<{ day: string; markdown: string }>(`/reports/${day}`);
-    setReport({ day: r.day, markdown: r.markdown });
-  };
-
-  const { status, config } = data;
+  const { config, paper, summary } = data;
+  const curve = paper?.curve ?? [];
   const hours = RANGES.find((r) => r.id === range)!.hours;
-  const cutoff = data.equity.length ? data.equity[data.equity.length - 1].bar_ts - hours * 3_600_000 : 0;
-  const equity = data.equity.filter((p) => p.bar_ts >= cutoff);
-  const trades = data.trades.filter((t) => !symbol || t.symbol === symbol);
-  const decisions = data.decisions.filter((d) => !symbol || d.symbol === symbol);
-  const positions = (status?.positions ?? []).filter((p) => !symbol || p.symbol === symbol);
+  const cutoff = curve.length ? curve[curve.length - 1].bar_ts - hours * 3_600_000 : 0;
+  const equity = curve.filter((p) => p.bar_ts >= cutoff);
+  const mine = <T extends { symbol: string }>(xs: T[]) => xs.filter((x) => !symbol || x.symbol === symbol);
+  const actions = mine(paper?.actions ?? []);
+  const buys = actions.filter((a) => a.action === "enter");
+  const trades = mine(paper?.trades ?? []);
+  const positions = mine(paper?.positions ?? []);
+  const pendingBuys = mine(paper?.pending ?? []).filter((p) => p.kind === "enter");
+  const symbols = config?.symbols ?? Object.keys(paper?.per_symbol ?? {});
+  const closed = paper?.trades ?? [];
+  const wins = closed.filter((t) => t.pnl > 0).length;
+  const realized = closed.reduce((s, t) => s + t.pnl, 0);
+  const pol = paper?.policy;
 
   const first = equity[0]?.equity;
   const last = equity[equity.length - 1]?.equity;
@@ -211,7 +198,7 @@ export default function App() {
             <span className="badge" title="Simulated fills, never real orders">PAPER</span>
           </div>
           <span className="spacer" />
-          <Health status={status} />
+          <Health lastCall={summary?.last_called_at ?? null} />
           <button className="icon-btn" onClick={load} aria-label="Refresh" title="Refresh">
             {Icon.refresh}
           </button>
@@ -236,14 +223,14 @@ export default function App() {
         <section className="card hero">
           <div className="hero-top">
             <div>
-              <div className="hero-label">Portfolio value</div>
+              <div className="hero-label">Jev paper portfolio</div>
               <div className="balance">
-                {fmtMoney(status?.equity)}
+                {fmtMoney(paper?.equity)}
                 <span className="ccy">USD</span>
               </div>
               <div className="deltas">
-                <span className={`pill ${tone(status?.total_return) ?? ""}`}>{fmtPct(status?.total_return)}</span>
-                <span>since start</span>
+                <span className={`pill ${tone(paper?.total_return) ?? ""}`}>{fmtPct(paper?.total_return)}</span>
+                <span>since the first logged call</span>
                 {rangeReturn !== null && range !== "all" && (
                   <>
                     <span className={`pill ${tone(rangeReturn) ?? ""}`}>{fmtPct(rangeReturn)}</span>
@@ -260,10 +247,10 @@ export default function App() {
               ))}
             </div>
           </div>
-          <EquityChart points={equity} initial={status?.initial_equity ?? 10_000} />
+          <EquityChart points={equity} initial={paper?.initial_equity ?? 10_000} />
           <p className="muted small">
-            {status ? `${status.model} (${status.model_version})` : "Paper run not started"} · {config?.exchange}{" "}
-            {config?.timeframe} · simulated fills, never real orders
+            Jev's own hourly answers run through the trading rules · {symbols.join(", ") || "no markets yet"} ·
+            simulated fills, never real orders
           </p>
         </section>
 
@@ -271,7 +258,7 @@ export default function App() {
           <button className={`chip all ${symbol === "" ? "on" : ""}`} onClick={() => setSymbol("")} aria-pressed={symbol === ""}>
             All markets
           </button>
-          {config?.symbols.map((s) => (
+          {symbols.map((s) => (
             <button key={s} className={`chip ${symbol === s ? "on" : ""}`} onClick={() => setSymbol(s)} aria-pressed={symbol === s}>
               <Coin symbol={s} />
             </button>
@@ -279,26 +266,26 @@ export default function App() {
         </nav>
 
         <section className="tiles">
-          <Tile label="Cash" value={fmtMoney(status?.cash)} sub={`from ${fmtMoney(status?.initial_equity, 0)} start`} />
-          <Tile label="Today (UTC)" value={fmtPct(status?.risk.day_return)} tone={tone(status?.risk.day_return)} />
-          <Tile label="Drawdown" value={fmtPct(status?.drawdown)} tone={status && status.drawdown < 0 ? "down" : undefined} />
+          <Tile label="Cash" value={fmtMoney(paper?.cash)} sub={`from ${fmtMoney(paper?.initial_equity, 0)} start`} />
+          <Tile label="Buys" value={String(paper?.counts.enter ?? 0)} sub={`out of ${(paper?.actions.length ?? 0)} hourly calls`} />
+          <Tile label="Drawdown" value={fmtPct(paper?.drawdown)} tone={paper && paper.drawdown < 0 ? "down" : undefined} />
           <Tile
             label="Closed trades"
-            value={String(status?.trades ?? 0)}
-            sub={`win rate ${status?.win_rate == null ? "n/a" : fmtPct(status.win_rate, false)}`}
+            value={String(closed.length)}
+            sub={`win rate ${closed.length ? fmtPct(wins / closed.length, false) : "n/a"}`}
           />
-          <Tile label="Realized PnL" value={fmtMoney(status?.realized_pnl)} tone={tone(status?.realized_pnl)} />
+          <Tile label="Realized PnL" value={fmtMoney(realized)} tone={tone(realized)} />
         </section>
 
         <div className="two split">
           <section className="card">
-            <h2>Open positions</h2>
-            {positions.length === 0 ? (
-              <p className="muted">None.</p>
+            <h2>What Jev holds</h2>
+            {positions.length === 0 && pendingBuys.length === 0 ? (
+              <p className="muted">Nothing right now. Jev buys a coin when p(up) is at least {pol?.entry_threshold ?? 0.55} and beats p(down) by {pol?.min_edge ?? 0.1}.</p>
             ) : (
               <div className="scroll"><table>
                 <thead>
-                  <tr><th>Market</th><th className="num">Qty</th><th className="num">Entry</th><th className="num">Stop</th><th className="num">Mark</th><th className="num">Unrealized</th></tr>
+                  <tr><th>Coin</th><th className="num">Qty</th><th className="num">Bought at</th><th className="num">Stop</th><th className="num">Now</th><th className="num">Unrealized</th></tr>
                 </thead>
                 <tbody>
                   {positions.map((p) => (
@@ -311,42 +298,65 @@ export default function App() {
                       <td className={`num ${tone(p.unrealized_pnl) ?? ""}`}>{fmtMoney(p.unrealized_pnl)}</td>
                     </tr>
                   ))}
+                  {pendingBuys.map((p) => (
+                    <tr key={`pending-${p.symbol}`}>
+                      <td><Coin symbol={p.symbol} /></td>
+                      <td className="num muted" colSpan={5}>buying {fmtPct(p.size_frac, false)} of equity at the next hour's open</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table></div>
             )}
-            {status?.pending.length ? (
-              <p className="muted small pending">
-                Pending at next open: {status.pending.map((p) => `${p.kind} ${p.symbol}`).join(", ")}
-              </p>
-            ) : null}
+            <h3>By coin</h3>
+            <div className="scroll"><table>
+              <thead>
+                <tr><th>Coin</th><th className="num">Buys</th><th className="num">Closed</th><th className="num">PnL</th></tr>
+              </thead>
+              <tbody>
+                {Object.entries(paper?.per_symbol ?? {}).map(([s, v]) => (
+                  <tr key={s}>
+                    <td><Coin symbol={s} /></td>
+                    <td className="num">{v.buys}</td>
+                    <td className="num">{v.trades}</td>
+                    <td className={`num ${tone(v.pnl) ?? ""}`}>{fmtMoney(v.pnl)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table></div>
           </section>
 
           <section className="card">
-            <h2>Sizing and limits</h2>
-            {config && (
+            <h2>Trading rules</h2>
+            {pol && (
               <dl className="kv">
-                <dt>Method</dt><dd>{String(config.sizing.sizing_method)}</dd>
-                <dt>Stop-loss</dt><dd>{fmtPct(Number(config.sizing.stop_loss_pct), false)}</dd>
-                <dt>Position at stop</dt><dd>{fmtPct(Number(config.sizing.position_frac_at_stop), false)} of equity</dd>
-                <dt>Max position / gross</dt><dd>{fmtPct(Number(config.sizing.max_position_frac), false)} / {fmtPct(Number(config.sizing.max_gross_exposure), false)}</dd>
-                <dt>Max daily loss</dt><dd>{fmtPct(Number(config.sizing.max_daily_loss_pct), false)}</dd>
-                <dt>Max hold</dt><dd>{config.sizing.max_holding_bars == null ? "none, exits on the model's signal" : `${config.sizing.max_holding_bars} bars`}</dd>
-                <dt>Direction question</dt><dd>±{config.flat_band_pct}% over {config.horizon_bars} bars</dd>
+                <dt>Buy when</dt><dd>p(up) ≥ {pol.entry_threshold} and p(up) − p(down) ≥ {pol.min_edge}</dd>
+                <dt>Sell when</dt><dd>p(down) ≥ {pol.exit_threshold}, the stop, or {pol.max_holding_bars ?? "no"} hours held</dd>
+                <dt>Stop-loss</dt><dd>{fmtPct(pol.stop_loss_pct, false)}</dd>
+                {config && (
+                  <>
+                    <dt>Position at stop</dt><dd>{fmtPct(Number(config.sizing.position_frac_at_stop), false)} of equity</dd>
+                    <dt>Max position / gross</dt><dd>{fmtPct(Number(config.sizing.max_position_frac), false)} / {fmtPct(Number(config.sizing.max_gross_exposure), false)}</dd>
+                    <dt>Direction question</dt><dd>±{config.flat_band_pct}% over {config.horizon_bars} hours</dd>
+                  </>
+                )}
+                <dt>Costs</dt><dd>{paper.fee_bps} bps fee + {paper.slippage_bps} bps slippage per side</dd>
               </dl>
             )}
+            <p className="muted small pending">
+              Fills use the logged hourly closes (each hour opens at the previous close), so stops only see closes.
+            </p>
           </section>
         </div>
 
         <section className="card">
           <div className="card-head">
-            <h2>Activity</h2>
+            <h2>Jev's activity</h2>
             <div className="seg" role="tablist" aria-label="Activity">
-              <button role="tab" aria-selected={activity === "trades"} className={activity === "trades" ? "on" : ""} onClick={() => setActivity("trades")}>
-                Trades
-              </button>
-              <button role="tab" aria-selected={activity === "decisions"} className={activity === "decisions" ? "on" : ""} onClick={() => setActivity("decisions")}>
-                Decisions
-              </button>
+              {(["buys", "trades", "calls"] as const).map((k) => (
+                <button key={k} role="tab" aria-selected={activity === k} className={activity === k ? "on" : ""} onClick={() => setActivity(k)}>
+                  {k === "buys" ? "Buys" : k === "trades" ? "Trades" : "Every call"}
+                </button>
+              ))}
             </div>
           </div>
           {activity === "trades" ? (
@@ -356,10 +366,10 @@ export default function App() {
               <div className="scroll">
                 <table>
                   <thead>
-                    <tr><th>Market</th><th>Entry (UTC)</th><th>Exit (UTC)</th><th className="num">Bars</th><th className="num">Return</th><th className="num">PnL</th><th>Exit reason</th></tr>
+                    <tr><th>Coin</th><th>Bought (UTC)</th><th>Sold (UTC)</th><th className="num">Hours</th><th className="num">Return</th><th className="num">PnL</th><th>Why sold</th></tr>
                   </thead>
                   <tbody>
-                    {trades.slice(0, 50).map((t) => (
+                    {trades.slice(0, 100).map((t) => (
                       <tr key={`${t.symbol}-${t.entry_ts}`}>
                         <td><Coin symbol={t.symbol} /></td>
                         <td>{fmtTime(t.entry_ts)} <span className="at">@ {fmtPrice(t.entry_price)}</span></td>
@@ -367,34 +377,39 @@ export default function App() {
                         <td className="num">{t.bars_held}</td>
                         <td className={`num ${tone(t.ret) ?? ""}`}>{fmtPct(t.ret)}</td>
                         <td className={`num ${tone(t.pnl) ?? ""}`}>{fmtMoney(t.pnl)}</td>
-                        <td>{t.exit_reason.split(":")[0]}</td>
+                        <td>{t.exit_reason.split(":")[0].replace("_", " ")}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             )
-          ) : decisions.length === 0 ? (
-            <p className="muted">No decisions yet.</p>
+          ) : (activity === "buys" ? buys : actions).length === 0 ? (
+            <p className="muted">
+              {activity === "buys"
+                ? `No buys yet. Jev's p(up) hasn't reached ${pol?.entry_threshold ?? 0.55} with enough edge${symbol ? ` on ${symbol}` : ""}.`
+                : "No calls yet."}
+            </p>
           ) : (
             <div className="scroll">
               <table>
                 <thead>
-                  <tr><th>Bar (UTC)</th><th>Market</th><th className="num">p(up)</th><th className="num">p(flat)</th><th className="num">p(down)</th><th className="num">Odds</th><th>Action</th><th>Reason</th></tr>
+                  <tr><th>Hour (UTC)</th><th>Coin</th><th className="num">Price</th><th className="num">p(up)</th><th className="num">p(down)</th><th className="num">Odds</th><th>Action</th><th>Reason</th></tr>
                 </thead>
                 <tbody>
-                  {decisions.map((d) => {
-                    const p = d.probs.direction ?? {};
+                  {(activity === "buys" ? buys : actions).slice(0, 200).map((a) => {
+                    const answered = a.status === "answered";
+                    const p = { up: a.p_up, down: a.p_down, flat: Math.max(0, 1 - a.p_up - a.p_down) };
                     return (
-                      <tr key={d.id}>
-                        <td>{fmtTime(d.bar_ts)}</td>
-                        <td><Coin symbol={d.symbol} /></td>
-                        <td className="num up">{d.abstain ? "–" : (p.up ?? 0).toFixed(2)}</td>
-                        <td className="num">{d.abstain ? "–" : (p.flat ?? 0).toFixed(2)}</td>
-                        <td className="num down">{d.abstain ? "–" : (p.down ?? 0).toFixed(2)}</td>
-                        <td className="num">{d.abstain ? "–" : <Odds p={p} />}</td>
-                        <td><span className={`tag ${d.policy_action ?? ""}`}>{d.policy_action ?? "n/a"}</span></td>
-                        <td className="reason">{d.abstain ? `abstain: ${d.abstain_reason ?? ""}` : d.policy_reason}</td>
+                      <tr key={`${a.symbol}-${a.bar_ts}`}>
+                        <td>{fmtTime(a.bar_ts)}</td>
+                        <td><Coin symbol={a.symbol} /></td>
+                        <td className="num">{fmtPrice(a.close)}</td>
+                        <td className="num up">{answered ? a.p_up.toFixed(2) : "–"}</td>
+                        <td className="num down">{answered ? a.p_down.toFixed(2) : "–"}</td>
+                        <td className="num">{answered ? <Odds p={p} /> : "–"}</td>
+                        <td><span className={`tag ${a.action}`}>{ACTION_LABEL[a.action]}</span></td>
+                        <td className="reason">{a.reason}</td>
                       </tr>
                     );
                   })}
@@ -404,55 +419,11 @@ export default function App() {
           )}
         </section>
 
-        <ForwardLog summary={forward.summary} rows={forward.rows} symbol={symbol} error={forward.error} />
-
-        <div className="two">
-          <section className="card">
-            <h2>Daily reports</h2>
-            {data.reports.length === 0 ? (
-              <p className="muted">The paper loop writes one after each UTC day ends.</p>
-            ) : (
-              <ul className="days">
-                {data.reports.map((d) => (
-                  <li key={d}>
-                    <button className={report?.day === d ? "link on" : "link"} onClick={() => openReport(d)}>
-                      {d}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {report && <pre className="report">{report.markdown}</pre>}
-          </section>
-
-          <section className="card">
-            <h2>Backtests</h2>
-            {data.backtests.length === 0 ? (
-              <p className="muted">None saved. Run python -m jevtrade.backtest.</p>
-            ) : (
-              <div className="scroll"><table>
-                <thead>
-                  <tr><th>Run</th><th className="num">Return</th><th className="num">Max DD</th><th className="num">Sharpe</th><th className="num">Trades</th></tr>
-                </thead>
-                <tbody>
-                  {data.backtests.map((b) => (
-                    <tr key={b.run_id}>
-                      <td title={`${b.start} to ${b.end}`}>{b.run_id}</td>
-                      <td className={`num ${tone(b.total_return) ?? ""}`}>{fmtPct(b.total_return)}</td>
-                      <td className="num">{fmtPct(b.max_drawdown)}</td>
-                      <td className="num">{b.sharpe ?? "n/a"}</td>
-                      <td className="num">{b.trades}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table></div>
-            )}
-          </section>
-        </div>
+        <ForwardLog summary={summary} rows={data.rows} symbol={symbol} error={null} />
 
         <footer className="muted small">
-          Read-only view of the paper account. Refreshes every minute. Last bar{" "}
-          {status ? fmtTime(status.last_bar_ts) : "n/a"} UTC.
+          Read-only view of Jev's forward log. Refreshes every minute. Last logged hour{" "}
+          {paper?.last_bar_ts ? fmtTime(paper.last_bar_ts) : "n/a"} UTC.
         </footer>
       </main>
     </>
