@@ -36,11 +36,6 @@ class FakeSource:
         return rows[: limit or 500]
 
 
-@pytest.fixture
-def candles_500():
-    return synthetic_candles(500)
-
-
 class WindowedSource(FakeSource):
     """Coinbase-style source: each request returns only candles inside the
     window [since, since + (limit - 1) * tf], capped at `cap` candles. Full

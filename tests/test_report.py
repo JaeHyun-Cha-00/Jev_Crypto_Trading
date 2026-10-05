@@ -11,7 +11,7 @@ from jevtrade.report import ReportConfig, build_report, calibration, format_repo
 from jevtrade.report.daily import day_bounds, realized_direction
 
 from conftest import H, T0
-from test_paper import FIRST, MultiSource, app_cfg, close_of, run_hourly, series
+from test_paper import FIRST, MultiSource, app_cfg, run_hourly, series
 
 
 def test_realized_direction():
