@@ -352,9 +352,9 @@ export default function App() {
           </div>
           <EquityChart points={equity} initial={paper?.initial_equity ?? 10_000} />
           <p className="caveat small" role="note">
-            <span aria-hidden="true">▲</span> Likely better than real trading. The replay only has hourly closes, so the
-            {pol ? ` ${fmtPct(pol.stop_loss_pct, false)}` : ""} stop-loss fires on a close, never on a dip within the hour.
-            Real stops would trigger more often and fill lower.
+            <span aria-hidden="true">▲</span> Likely better than real trading. Fills use Coinbase hourly candles, not
+            Robinhood's quotes, and assume every order fills in full. Hours logged before candle highs and lows were
+            recorded only check the{pol ? ` ${fmtPct(pol.stop_loss_pct, false)}` : ""} stop-loss on closes.
           </p>
           <p className="muted small">
             Jev's own hourly answers run through the trading rules · {symbols.length > 4 ? `${symbols.length} coins` : symbols.join(", ") || "no coins yet"} ·
@@ -418,7 +418,7 @@ export default function App() {
             )}
             <p className="muted small pending">
               Orders fill when the hourly run actually asked Jev (often late), at a price estimated within that hour.
-              Stops only see hourly closes.
+              Stops trigger on the hour's low.
             </p>
           </section>
         </div>

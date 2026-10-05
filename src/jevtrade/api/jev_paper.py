@@ -13,10 +13,11 @@ order stays pending. Rows without `called_at` fill at the next open. While a
 buy waits, that coin is treated as flat, and a newer answer that also says buy
 replaces the waiting order.
 
-Each logged row carries its candle's close, so a bar is approximated as:
-open = the previous hour's logged close (this candle's own close when the
-previous hour is missing), low = min(open, close). Stops therefore trigger
-on closes, not on intrabar dips.
+Rows logged since 2026-10-05 carry their candle's open, high, low and
+volume, so stops trigger on the hour's real low. Older rows carry only the
+close, and their bar is approximated as: open = the previous hour's logged
+close (this candle's own close when that hour is missing), low = min(open,
+close), so their stops only see closes.
 
 Within an hour, symbols are evaluated in `Simulator.symbols_by_priority`, the
 same order the backtest and paper loop use: held coins first, then by edge
@@ -54,6 +55,7 @@ class Bar:
     high: float
     low: float
     close: float
+    volume: float | None = None   # base units; None on rows logged before it was recorded
 
 
 def _called_ms(row: dict | None) -> int | None:
@@ -71,27 +73,41 @@ def _fill_bar(bar: Bar, ts: int, due: int, tf_ms: int) -> Bar:
     """The rest of `bar` from `due` on, within the hour [ts, ts + tf).
 
     The price is assumed to move in a straight line from the open to the
-    close, so the remainder opens part way along and only its own range
-    counts towards a same-hour stop; at `due <= ts` it is the whole bar.
+    close, so the remainder opens part way along. The hour's dip below that
+    line may have come before or after `due`; it is scaled by the share of
+    the hour left, so a fill late in the hour sees little of it. At
+    `due <= ts` this is the whole bar.
     """
     frac = min(max((due - ts) / tf_ms, 0.0), 1.0)
     if frac == 0.0:
         return bar
     px = bar.open + (bar.close - bar.open) * frac
-    return Bar(px, max(px, bar.close), min(px, bar.close), bar.close)
+    line_low = min(px, bar.close)
+    low = line_low - max(0.0, min(bar.open, bar.close) - bar.low) * (1 - frac)
+    high = max(px, bar.close) + max(0.0, bar.high - max(bar.open, bar.close)) * (1 - frac)
+    return Bar(px, high, low, bar.close, bar.volume)
+
+
+def _num(v) -> float | None:
+    return None if v is None else float(v)
 
 
 def _bars(rows: list[dict], tf_ms: int) -> dict[str, dict[int, Bar]]:
-    closes: dict[str, dict[int, float]] = defaultdict(dict)
+    logged: dict[str, dict[int, dict]] = defaultdict(dict)
     for r in rows:
         if r.get("close") is not None:
-            closes[r["symbol"]][r["candle_ts"]] = float(r["close"])
+            logged[r["symbol"]][r["candle_ts"]] = r
     out: dict[str, dict[int, Bar]] = {}
-    for sym, by_ts in closes.items():
+    for sym, by_ts in logged.items():
         out[sym] = {}
-        for ts, close in by_ts.items():
-            opened = by_ts.get(ts - tf_ms, close)
-            out[sym][ts] = Bar(opened, max(opened, close), min(opened, close), close)
+        for ts, r in by_ts.items():
+            close = float(r["close"])
+            o, h, lo = _num(r.get("open")), _num(r.get("high")), _num(r.get("low"))
+            if o is None or h is None or lo is None:   # close-only row: open at the previous close
+                prev = by_ts.get(ts - tf_ms)
+                o = float(prev["close"]) if prev else close
+                h, lo = max(o, close), min(o, close)
+            out[sym][ts] = Bar(o, max(h, o, close), min(lo, o, close), close, _num(r.get("volume")))
     return out
 
 
