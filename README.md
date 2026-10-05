@@ -350,6 +350,8 @@ firewall or VPN; it has no authentication.
 | `/api/candles?symbol=BTC/USD&limit=` | stored candles |
 | `/api/reports`, `/api/reports/{day}` | daily reports (Markdown and JSON) |
 | `/api/backtests`, `/api/backtests/{run_id}` | backtest summaries and downsampled equity |
+| `/api/forward/summary` | the forward log scored: counts, hit rate vs. baselines, confusion matrix, calibration, Brier/log loss, cost, source and any fetch error |
+| `/api/forward/rows?symbol=&limit=` | recent forward calls joined with their outcomes (null while pending), newest first, without `state` |
 
 Every paper route takes `?run_id=` (default `paper.run_id`).
 
@@ -373,6 +375,8 @@ API and refreshes every minute. It shows:
 - Recent trades and recent decisions (p(up), p(flat), p(down), the
   policy's action and reason), filterable by symbol.
 - Daily reports and saved backtests.
+- The Jev forward log (see below): how the hourly forward calls compare
+  with what happened.
 
 It follows the OS light or dark setting and works down to phone width. Set
 `JEVTRADE_API` to point the dev server at an API elsewhere.
@@ -401,6 +405,40 @@ Locally, against any directory:
 ```bash
 python -m jevtrade.collect --out data-log --max-backfill 24
 ```
+
+#### Jev forward log on the dashboard
+
+The API reads the `data-log` branch and the dashboard's **Jev forward log**
+section shows how the calls compare with what happened `horizon_bars` later:
+
+- tiles for scored calls (with pending, abstain and error counts), Jev's
+  direction hit rate marked ▲/▼ against the best naive baseline, direction
+  Brier next to the Brier of the realized base rates, and the cost so far;
+- Jev's hit rate next to "always flat" and "always the most common realized
+  class" (a hindsight baseline; usually flat, about 75% of 4h windows);
+- a confusion matrix (Jev's call vs. what happened) and a calibration table
+  (Jev's direction confidence in bins vs. hit rate), plus log loss and the
+  adverse-move Brier (the `adverse_move` Noul is P(yes));
+- the recent calls: candle, symbol, call and confidence, regime, P(adverse),
+  realized direction and return, and hit, miss or pending.
+
+It follows the page's symbol filter and refresh. Configure it under
+`forward_log` in `config/default.yaml`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `source` | `github` | `github` (HTTPS), `local` (a directory) or `off` |
+| `repo`, `branch` | this repo, `data-log` | where `source: github` reads |
+| `local_dir` | `data-log` | for `source: local`, e.g. `git worktree add data-log origin/data-log` |
+| `refresh_seconds` | `300` | re-read at most this often; a failed refresh keeps the last good data and shows the error |
+| `max_days` | `30` | newest day files to load |
+| `token_env` | `GITHUB_TOKEN` | env var with an optional GitHub token |
+
+The GitHub source lists files with the contents API and downloads only new
+or changed day files. Set `GITHUB_TOKEN` in `.env` if the repo is private
+(a fine-grained token with read-only Contents access on this repo is
+enough). If GitHub won't show the repo, the section says whether the token
+is missing or lacks access. It only reads: no writes, model calls or exchange calls.
 
 ## Running on a fresh Linux VM
 
