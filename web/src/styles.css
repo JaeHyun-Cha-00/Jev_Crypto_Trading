@@ -119,3 +119,28 @@ td.reason { color: var(--ink-2); }
 .link.on { background: var(--wash); font-weight: 600; }
 .report { white-space: pre-wrap; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--page); border-radius: 8px; padding: 12px; max-height: 420px; overflow: auto; margin: 0; }
 footer { margin-top: 24px; }
+
+/* Jev forward log */
+h3 { font-size: 13px; font-weight: 600; color: var(--ink-2); margin: 16px 0 8px; }
+.card .banner { margin: 8px 0 0; }
+.tiles.inner { margin: 12px 0 0; }
+.tiles.inner .tile { background: var(--page); }
+.two.inner { margin-bottom: 0; gap: 16px 24px; }
+.bars { display: grid; gap: 6px; max-width: 640px; }
+.bar-row { display: grid; grid-template-columns: minmax(90px, 240px) 1fr 44px; gap: 10px; align-items: center; font-size: 13px; }
+.bar-label { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-track { height: 10px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+.bar-fill { display: block; height: 100%; background: var(--axis); border-radius: 4px; }
+.bar-fill.jev { background: var(--series-1); }
+.bar-value { color: var(--ink); }
+.matrix { width: auto; min-width: 260px; }
+.matrix caption { text-align: left; caption-side: bottom; padding-top: 6px; }
+.matrix th[scope="row"] { border-bottom: 1px solid var(--grid); }
+.matrix td { min-width: 52px; }
+.matrix td.diag { font-weight: 600; }
+.tag.hit { color: var(--up); border-color: currentColor; }
+.tag.miss { color: var(--down); border-color: currentColor; }
+@media (max-width: 480px) {
+  .bar-row { grid-template-columns: 1fr 44px; }
+  .bar-track { grid-column: 1 / -1; grid-row: 2; }
+}

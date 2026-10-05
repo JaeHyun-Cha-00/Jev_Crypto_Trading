@@ -109,3 +109,44 @@ def test_missing_database_is_503(tmp_path):
     assert c.get("/api/health").json()["status"] == "no_database"
     assert c.get("/api/paper/status").status_code == 503
     assert not (tmp_path / "none.sqlite").exists()
+
+
+def test_forward_routes_with_github_mocked(env, monkeypatch):
+    from jevtrade.api.forward import ForwardLog
+    from jevtrade.api.settings import ForwardLogConfig
+    from test_forward import FakeGitHub
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    cfg, _ = env
+    gh = FakeGitHub()
+    fwd = ForwardLog(ForwardLogConfig(source="github", repo="me/repo"), http_get=gh)
+    c = TestClient(create_app(cfg, forward_log=fwd))
+    s = c.get("/api/forward/summary").json()
+    assert s["error"] is None and s["source"] == "github"
+    assert s["overall"]["scored"] == 4 and s["overall"]["hit_rate"] == 0.5
+    assert s["per_symbol"]["BTC/USD"]["pending"] == 1
+    rows = c.get("/api/forward/rows").json()
+    assert len(rows) == 7 and rows[0]["outcome"] is None
+    assert not any("state" in r or "raw_response" in r for r in rows)
+    eth = c.get("/api/forward/rows", params={"symbol": "ETH/USD", "limit": 2}).json()
+    assert len(eth) == 2 and {r["symbol"] for r in eth} == {"ETH/USD"}
+    assert c.get("/api/forward/rows", params={"limit": 0}).status_code == 422
+    assert c.post("/api/forward/summary").status_code == 405
+
+
+def test_forward_unreachable_is_empty_not_500(env):
+    cfg, c = env   # default config: source github, network refused by conftest
+    s = c.get("/api/forward/summary")
+    assert s.status_code == 200
+    body = s.json()
+    assert body["overall"]["decisions"] == 0 and body["overall"]["hit_rate"] is None
+    assert "network disabled" in body["error"]
+    assert c.get("/api/forward/rows").json() == []
+
+
+def test_forward_off(env):
+    cfg, _ = env
+    off = cfg.model_copy(deep=True)
+    off.forward_log.source = "off"
+    s = TestClient(create_app(off)).get("/api/forward/summary").json()
+    assert s["source"] == "off" and s["error"] is None and s["overall"]["scored"] == 0
