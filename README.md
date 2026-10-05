@@ -26,7 +26,7 @@ trade, and when to exit. All risk limits live in code, never in prompts.
 | `src/jevtrade/backtest/` | Event-driven walk-forward backtester | ✅ stage 4 |
 | `src/jevtrade/paper/` | Live paper loop, restart-safe, simulated fills only | ✅ stage 7 |
 | `src/jevtrade/report/` | Daily Markdown report: account, trades, decisions, calibration | ✅ stage 8 |
-| `api/` | Read-only FastAPI | planned |
+| `src/jevtrade/api/` | Read-only FastAPI over the store and reports | ✅ stage 9 |
 | `web/` | React dashboard | planned |
 
 ## Setup
@@ -35,7 +35,7 @@ Requires Python 3.11 or newer.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e '.[dev]'
+pip install -e '.[dev]'   # or '.[api]' for just the runtime plus the API server
 cp .env.example .env   # only needed once the JevModel stage lands
 pytest
 ```
@@ -315,6 +315,32 @@ writes each day's report right after that day's last bar
 On Coinbase BTC/ETH since 2025, about 75% of 4-hour windows ended "flat"
 (within ±1%), and up and down were about 12.5% each. A model that rarely
 says flat is badly calibrated even if its up/down calls are informative.
+
+### 9. API (read-only)
+
+```bash
+python -m jevtrade.api                  # http://127.0.0.1:8000, docs at /docs
+```
+
+Every route is a `GET`, and the database is opened with SQLite's
+`mode=ro`, so the API can't write, place orders, or call the model. It is
+safe to run next to the paper loop. Keep it on localhost or behind a
+firewall or VPN; it has no authentication.
+
+| Route | Returns |
+|---|---|
+| `/api/health` | database present, paper heartbeat |
+| `/api/config` | symbols, model, sizing and risk limits (no secrets) |
+| `/api/paper/status` | equity, cash, return, drawdown, open positions with unrealized PnL, pending orders, risk state |
+| `/api/paper/equity?since=&limit=` | equity, cash and exposure per bar |
+| `/api/paper/trades?symbol=&limit=` | closed paper trades, newest first |
+| `/api/decisions?symbol=&before=&limit=` | model probabilities and the policy's verdict per bar |
+| `/api/decisions/{id}` | one decision with its state text and per-question answers |
+| `/api/candles?symbol=BTC/USD&limit=` | stored candles |
+| `/api/reports`, `/api/reports/{day}` | daily reports (Markdown and JSON) |
+| `/api/backtests`, `/api/backtests/{run_id}` | backtest summaries and downsampled equity |
+
+Every paper route takes `?run_id=` (default `paper.run_id`).
 
 ## Evaluation validity
 

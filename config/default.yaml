@@ -87,3 +87,8 @@ paper:                       # python -m jevtrade.paper run   (simulated fills o
 report:                      # python -m jevtrade.report [--day YYYY-MM-DD]
   output_dir: reports/out    # <output_dir>/<run id>/<day>.md and .json (git-ignored)
   buckets: 5                 # reliability buckets for p(up)
+
+api:                         # python -m jevtrade.api   (GET only, database opened read-only)
+  host: 127.0.0.1            # 0.0.0.0 inside docker; keep it off the public internet
+  port: 8000
+  cors_origins: ["http://localhost:5173"]   # the dashboard's dev server
