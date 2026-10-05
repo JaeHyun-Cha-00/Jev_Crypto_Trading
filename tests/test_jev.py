@@ -246,3 +246,13 @@ def test_jev_prompt_doc_matches_default_questions():
         assert q.instructions in doc
         for k, v in q.options.items():
             assert f"- `{k}`: {v}" in doc
+
+
+def test_max_holding_bars_follows_direction_horizon(tmp_path):
+    cfg = load_config()
+    assert cfg.decision.horizon_bars == 4 and cfg.policy.max_holding_bars == 4
+    p = tmp_path / "c.yaml"
+    p.write_text("decision: {horizon_bars: 6}\n")
+    assert load_config(p).policy.max_holding_bars == 6
+    p.write_text("decision: {horizon_bars: 6}\npolicy: {max_holding_bars: 10}\n")
+    assert load_config(p).policy.max_holding_bars == 10

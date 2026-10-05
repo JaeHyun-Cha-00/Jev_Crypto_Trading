@@ -52,4 +52,4 @@ policy:                      # all risk limits live here, enforced in code
   max_daily_loss_pct: 0.03   # blocks new entries for the rest of the UTC day
   cooldown_after_losses: 3
   cooldown_bars: 24
-  max_holding_bars: 24
+  # max_holding_bars defaults to decision.horizon_bars (4); set it here to override.
