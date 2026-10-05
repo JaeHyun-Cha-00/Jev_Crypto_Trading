@@ -23,7 +23,7 @@ trade, and when to exit. All risk limits live in code, never in prompts.
 | `src/jevtrade/state/` | Anonymized JSON market state for the model | ✅ stage 3 |
 | `src/jevtrade/decision/` | `DecisionModel`: Mock ✅, Baseline ✅, Jev (pending docs) | ✅ stage 3 (partial) |
 | `src/jevtrade/policy/` | Probabilities → actions, risk limits | ✅ stage 3 |
-| `backtest/` | Event-driven walk-forward backtester | planned |
+| `src/jevtrade/backtest/` | Event-driven walk-forward backtester | ✅ stage 4 |
 | `paper/` | Live paper loop | planned |
 | `report/` | Metrics and daily Markdown summary | planned |
 | `api/` | Read-only FastAPI | planned |
@@ -159,10 +159,18 @@ orders fill at the next bar's open.
 - **Entry** requires `p(up) ≥ entry_threshold` and
   `p(up) − p(down) ≥ min_edge`. An abstain or a missing decision means no
   trade.
-- **Size** is `risk_per_trade / stop_loss_pct`, capped by `max_position_frac`
-  and by the room left under `max_gross_exposure`.
+- **Size** is risk-based: a trade risks `risk_per_trade` (1%) of equity if
+  its stop is hit, so notional = equity × 1% / stop distance (33% of equity
+  with the 3% stop). It is capped at `max_position_frac` (50%) and by the
+  room left under `max_gross_exposure` (50%). Every backtest summary prints
+  the sizing in force.
 - **Exits** are checked in order: stop-loss, `max_holding_bars`,
   then `p(down) ≥ exit_threshold`. The first two don't depend on the model.
+  `max_holding_bars` can differ per model through
+  `max_holding_bars_by_model`; `null` turns the time exit off. The baseline
+  has it off, so it exits when the SMAs cross back (or on the stop).
+- **Re-entry:** after an exit, the same symbol can't enter again for
+  `min_trade_interval_bars` (4) bars.
 - **Stops** trigger on the bar's low, not its close. A stopped long fills
   inside that bar at the stop price, or at the bar's open if it gapped
   below the stop, less `stop_slippage_bps`. The backtest and paper loops
@@ -173,6 +181,49 @@ orders fill at the next bar's open.
   `cooldown_after_losses` consecutive losses, entries pause for
   `cooldown_bars`.
 - Every action records a reason string, including skips.
+
+### 4. Backtest
+
+```bash
+python -m jevtrade.data                      # make sure the store is synced
+python -m jevtrade.backtest --model baseline # or mock; --start/--end ISO-8601 UTC, --symbols ...
+```
+
+`backtest/engine.py` walks every closed bar in time order across the
+configured symbols and runs the same pipeline the paper loop will run:
+features, `build_state()`, `DecisionModel.decide()`, then `Policy.evaluate()`
+with `bar_open` and `bar_low`.
+- Each decision only sees candles up to its bar. Features are computed once
+  and sliced, which is safe because they are causal; a test checks that
+  appending future bars leaves every earlier decision unchanged.
+- Entries and model or holding exits fill at the **next bar's open**, moved
+  `slippage_bps` against the trade. Stop exits fill **inside the bar** at the
+  action's `fill_price`. An entry's stop is re-anchored to its fill price.
+- Every fill pays `fee_bps` on notional. Equity is cash plus positions marked
+  at each close; positions still open at the end close at the last close.
+- `max_holding_bars` defaults to `decision.horizon_bars` (4), so a position is
+  held for the 4 hours the direction question asks about. The baseline
+  overrides it to no time limit and exits on its own signal.
+- Every decision is logged to `decisions` / `decision_answers` under the run
+  id. `summary.json`, `summary.md`, `trades.csv` and `equity.csv` go to
+  `backtest.output_dir/<run id>/`.
+- `--model jev` costs one API call per symbol per bar and needs
+  `--allow-live-model`. Runs that end before the pinned snapshot's date are
+  labelled potentially contaminated (see below). Tests never call Jev.
+
+Results on Coinbase BTC/USD and ETH/USD, 1h, 2025-01-01 to 2026-10-05, with the
+default config (10 bps fee and 2 bps slippage per side, 1% risk per trade):
+
+| Model | Return | Max DD | Sharpe | Trades | Win rate | Avg bars held | Fees | Buy & hold BTC / ETH |
+|---|---|---|---|---|---|---|---|---|
+| Mock (hash noise) | −56.1% | −56.7% | −5.4 | 1,181 | 33.2% | 3.5 | 5,046 | −8.0% / −18.7% |
+| Baseline (SMA 20/50) | −35.4% | −40.9% | −1.5 | 387 | 30.0% | 37.9 | 1,457 | −8.0% / −18.7% |
+
+Neither offline model has an edge over this period. Letting the baseline
+ride its own signal cut its trade count from 1,628 to 387 and its loss
+roughly in half; the mock model still pays round-trip costs (about 24 bps)
+on a 4-bar hold. These runs check the plumbing and set the bar Jev has to
+clear.
 
 ## Evaluation validity
 

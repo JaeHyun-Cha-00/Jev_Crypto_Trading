@@ -26,22 +26,58 @@ class PolicyConfig(BaseModel):
     entry_threshold: float = Field(0.55, gt=0, le=1)   # min p(up) to enter
     min_edge: float = Field(0.10, ge=0, le=1)          # min p(up) - p(down)
     exit_threshold: float = Field(0.55, gt=0, le=1)    # p(down) that triggers a model exit
+    # Sizing is risk-based: notional = equity * risk_per_trade / stop distance,
+    # capped at max_position_frac of equity and by room under max_gross_exposure.
     risk_per_trade: float = Field(0.01, gt=0, le=1)    # equity lost if the stop is hit
     stop_loss_pct: float = Field(0.03, gt=0, lt=1)
     stop_slippage_bps: float = Field(5.0, ge=0, lt=10_000)  # adverse slippage on stop fills
-    max_position_frac: float = Field(0.25, gt=0, le=1)  # per-symbol notional / equity
+    max_position_frac: float = Field(0.50, gt=0, le=1)  # per-symbol notional / equity
     max_gross_exposure: float = Field(0.50, gt=0, le=1)  # all positions / equity
     min_trade_frac: float = Field(0.01, gt=0, le=1)
     max_daily_loss_pct: float = Field(0.03, gt=0, lt=1)  # vs equity at UTC day start
     cooldown_after_losses: int = Field(3, ge=1)
     cooldown_bars: int = Field(24, ge=0)
-    max_holding_bars: int = Field(24, ge=1)
+    max_holding_bars: int | None = Field(24, ge=1)     # None: no time-based exit
+    # Per decision model override of max_holding_bars (None: the model's own
+    # exit signal and the stop are the only exits). See `for_model`.
+    max_holding_bars_by_model: dict[str, int | None] = Field(default_factory=lambda: {"baseline": None})
+    min_trade_interval_bars: int = Field(4, ge=0)      # bars after an exit before re-entering
 
     @model_validator(mode="after")
     def _caps(self) -> "PolicyConfig":
         if self.max_position_frac > self.max_gross_exposure:
             raise ValueError("max_position_frac cannot exceed max_gross_exposure")
+        bad = {m: v for m, v in self.max_holding_bars_by_model.items() if v is not None and v < 1}
+        if bad:
+            raise ValueError(f"max_holding_bars_by_model values must be >= 1 or null: {bad}")
         return self
+
+    def for_model(self, model: str) -> "PolicyConfig":
+        """This config with `max_holding_bars` resolved for the given decision model."""
+        if model not in self.max_holding_bars_by_model:
+            return self
+        return self.model_copy(update={"max_holding_bars": self.max_holding_bars_by_model[model]})
+
+    def position_frac(self, entry: float, stop: float) -> float:
+        """Notional / equity that loses `risk_per_trade` of equity if `stop` is hit, before caps."""
+        dist = (entry - stop) / entry
+        return self.risk_per_trade / dist if dist > 0 else 0.0
+
+    def describe_sizing(self, starting_balance: float) -> dict:
+        return {
+            "starting_balance": starting_balance,
+            "sizing_method": f"risk-based: risk {self.risk_per_trade:.2%} of equity per trade, "
+                             f"notional = risk / stop distance",
+            "risk_per_trade": self.risk_per_trade,
+            "stop_loss_pct": self.stop_loss_pct,
+            "position_frac_at_stop": round(min(self.risk_per_trade / self.stop_loss_pct,
+                                               self.max_position_frac), 6),
+            "max_position_frac": self.max_position_frac,
+            "max_gross_exposure": self.max_gross_exposure,
+            "max_daily_loss_pct": self.max_daily_loss_pct,
+            "max_holding_bars": self.max_holding_bars,
+            "min_trade_interval_bars": self.min_trade_interval_bars,
+        }
 
 
 @dataclass
@@ -59,6 +95,7 @@ class RiskState:
     day: int  # UTC day number (ts_ms // 86_400_000)
     consecutive_losses: int = 0
     cooldown_until_ts: int = 0
+    last_exit_ts: dict[str, int] = field(default_factory=dict)  # per symbol, bar the exit filled in
 
 
 @dataclass
@@ -114,8 +151,12 @@ def roll_day(risk: RiskState, ts_ms: int, equity: float) -> None:
         risk.day_start_equity = equity
 
 
-def register_trade_result(risk: RiskState, pnl: float, exit_ts: int, tf_ms: int, cfg: PolicyConfig) -> None:
-    """Update loss streak and cooldown after a round trip closes."""
+def register_trade_result(
+    risk: RiskState, pnl: float, exit_ts: int, tf_ms: int, cfg: PolicyConfig, symbol: str | None = None,
+) -> None:
+    """Update loss streak, cooldown and the symbol's last exit after a round trip closes."""
+    if symbol is not None:
+        risk.last_exit_ts[symbol] = exit_ts
     if pnl < 0:
         risk.consecutive_losses += 1
         if risk.consecutive_losses >= cfg.cooldown_after_losses:
@@ -159,7 +200,7 @@ class Policy:
                               f"fill {fill:.6g} at {how} less {c.stop_slippage_bps:g}bps",
                               fill_price=fill, details=probs)
             held = (bar_ts - pos.entry_ts) // self.tf_ms + 1
-            if held >= c.max_holding_bars:
+            if c.max_holding_bars is not None and held >= c.max_holding_bars:
                 return Action("exit", symbol, f"max_holding: held {held} bars >= {c.max_holding_bars}",
                               details=probs)
             if usable and p_down >= c.exit_threshold:
@@ -189,7 +230,16 @@ class Policy:
             return Action("skip", symbol, f"cooldown: until ts {acct.risk.cooldown_until_ts}",
                           passed_threshold=True, details=probs)
 
-        size = min(c.risk_per_trade / c.stop_loss_pct, c.max_position_frac)
+        last_exit = acct.risk.last_exit_ts.get(symbol)
+        if last_exit is not None and c.min_trade_interval_bars:
+            since = (bar_ts - last_exit) // self.tf_ms
+            if since < c.min_trade_interval_bars:
+                return Action("skip", symbol,
+                              f"min_trade_interval: {since} bars since exit < {c.min_trade_interval_bars}",
+                              passed_threshold=True, details=probs)
+
+        stop = close * (1 - c.stop_loss_pct)
+        size = min(c.position_frac(close, stop), c.max_position_frac)
         room = c.max_gross_exposure - acct.gross_exposure_frac()
         size = min(size, room)
         if size < c.min_trade_frac:
@@ -199,5 +249,5 @@ class Policy:
         return Action("enter", symbol,
                       f"entry: p_up {p_up:.3f} >= {c.entry_threshold}, edge {p_up - p_down:.3f}; "
                       f"size {size:.3f} of equity",
-                      size_frac=size, stop_price=close * (1 - c.stop_loss_pct),
+                      size_frac=size, stop_price=stop,
                       passed_threshold=True, details=probs)
