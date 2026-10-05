@@ -25,6 +25,7 @@ from ..sim import SimState
 from ..data.timeframes import timeframe_ms
 from .forward import ForwardLog
 from .jev_paper import replay
+from .market import TIMEFRAMES, Market, MarketError
 from .settings import ApiConfig  # noqa: F401  (re-exported)
 
 
@@ -41,10 +42,11 @@ def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
 
-def create_app(app_cfg, forward_log: ForwardLog | None = None) -> FastAPI:
-    """`app_cfg` is a jevtrade.config.AppConfig; `forward_log` overrides the
-    loader built from `app_cfg.forward_log` (tests inject one)."""
+def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | None = None) -> FastAPI:
+    """`app_cfg` is a jevtrade.config.AppConfig; `forward_log` and `market` override the
+    loaders built from `app_cfg.forward_log` and `app_cfg.market` (tests inject them)."""
     fwd = forward_log or ForwardLog(app_cfg.forward_log)
+    mkt = market or Market(app_cfg.data.symbols, app_cfg.market)
     db_path = Path(app_cfg.storage.sqlite_path)
     app = FastAPI(title="jevtrade (read-only)", version="1",
                   description="Paper-trading state. GET only; the database is opened read-only.")
@@ -284,5 +286,38 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None) -> FastAPI:
         out = dict(paper_cache["out"])
         out["actions"] = out["actions"][:actions]
         return out
+
+    # -- live market (public Coinbase data; jevtrade.api.market)
+
+    def market_call(fn, *args):
+        if not app_cfg.market.enabled:
+            raise HTTPException(404, "market data is off (market.enabled in config)")
+        try:
+            return fn(*args)
+        except KeyError:
+            raise HTTPException(404, f"{args[0]!r} is not a tracked coin")
+        except MarketError as e:
+            raise HTTPException(502, f"Coinbase: {e}")
+
+    @app.get("/api/market/tickers")
+    def market_tickers():
+        """Price, 24-hour change, range and volume for every tracked coin, plus a 24-hour sparkline."""
+        return market_call(mkt.tickers)
+
+    @app.get("/api/market/candles")
+    def market_candles(symbol: str, timeframe: str = Query("1h", pattern="^(" + "|".join(TIMEFRAMES) + ")$"),
+                       end: int | None = Query(None, description="UTC seconds; default now")):
+        """Up to 300 Coinbase candles, oldest first; ts is the candle open in UTC ms."""
+        return market_call(mkt.candles, symbol, timeframe, end)
+
+    @app.get("/api/market/book")
+    def market_book(symbol: str, depth: int = Query(15, ge=1, le=50)):
+        """Best bids and asks (aggregated by price level)."""
+        return market_call(mkt.book, symbol, depth)
+
+    @app.get("/api/market/trades")
+    def market_trades(symbol: str, limit: int = Query(40, ge=1, le=100)):
+        """Recent fills, newest first; side is the taker's."""
+        return market_call(mkt.trades, symbol, limit)
 
     return app

@@ -137,3 +137,10 @@ forward_log:                 # the dashboard's "Jev forward log": the collect wo
   # earlier candle (its backfill stops here), and the dashboard ignores earlier
   # lines, so the portfolio starts at its full balance from this hour. null: no cutoff.
   start: "2026-10-05T06:00:00Z"
+
+market:                      # the dashboard's live coin list and coin pages: public Coinbase data, no keys
+  enabled: true
+  base_url: https://api.exchange.coinbase.com
+  stats_seconds: 5           # 24-hour price, change and volume for every coin, one call
+  spark_seconds: 300         # 24-hour sparklines, one call per coin in the background
+  book_seconds: 2            # order book and recent trades cache

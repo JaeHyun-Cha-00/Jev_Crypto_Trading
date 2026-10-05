@@ -65,3 +65,15 @@ class JevPaperConfig(BaseModel):
             return self.spread_bps + self.thin_extra_bps
         thin = min(max(math.log10(self.ref_volume_usd / dollar_volume) / 2, 0.0), 1.0)
         return self.spread_bps + self.thin_extra_bps * thin
+
+
+class MarketConfig(BaseModel):
+    """Live prices for the dashboard's coin list (jevtrade.api.market): public Coinbase data only."""
+
+    enabled: bool = True
+    base_url: str = "https://api.exchange.coinbase.com"
+    stats_seconds: float = Field(5, ge=1)        # re-read 24-hour stats for all coins at most this often
+    spark_seconds: float = Field(300, ge=30)     # refresh the 24-hour sparklines this often
+    book_seconds: float = Field(2, ge=0.5)       # order book and trades cache
+    min_interval_s: float = Field(0.15, ge=0)    # spacing between Coinbase calls (public limit: 10/s)
+    timeout_s: float = Field(10, gt=0)

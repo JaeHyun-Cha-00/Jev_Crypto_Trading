@@ -6,12 +6,14 @@ variables at the point of use. Each stage adds its own section here.
 
 from __future__ import annotations
 
+import os
+import warnings
 from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .api.settings import ApiConfig, ForwardLogConfig, JevPaperConfig
+from .api.settings import ApiConfig, ForwardLogConfig, JevPaperConfig, MarketConfig
 from .backtest.engine import BacktestConfig
 from .decision.base import DecisionConfig
 from .features.compute import FeatureConfig
@@ -21,6 +23,17 @@ from .report.daily import ReportConfig
 from .state.builder import StateConfig
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "default.yaml"
+
+
+def default_config_path() -> Path:
+    """$JEVTRADE_CONFIG, else the repo's config/default.yaml: next to the source in a
+    checkout or editable install, else under the working directory (a regular
+    `pip install .` puts this file in site-packages, as in the Docker images)."""
+    env = os.environ.get("JEVTRADE_CONFIG")
+    if env:
+        return Path(env)
+    cwd = Path.cwd() / "config" / "default.yaml"
+    return DEFAULT_CONFIG_PATH if DEFAULT_CONFIG_PATH.exists() or not cwd.exists() else cwd
 
 
 class DataConfig(BaseModel):
@@ -61,6 +74,7 @@ class AppConfig(BaseModel):
     api: ApiConfig = Field(default_factory=ApiConfig)
     forward_log: ForwardLogConfig = Field(default_factory=ForwardLogConfig)
     jev_paper: JevPaperConfig = Field(default_factory=JevPaperConfig)
+    market: MarketConfig = Field(default_factory=MarketConfig)
 
     @model_validator(mode="after")
     def _holding_follows_horizon(self) -> "AppConfig":
@@ -72,6 +86,10 @@ class AppConfig(BaseModel):
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:
-    p = Path(path) if path else DEFAULT_CONFIG_PATH
+    p = Path(path) if path else default_config_path()
+    if not p.exists():
+        if path or os.environ.get("JEVTRADE_CONFIG"):
+            raise FileNotFoundError(f"config file not found: {p}")
+        warnings.warn(f"no config at {p}; using built-in defaults (BTC/ETH only)", stacklevel=2)
     raw = yaml.safe_load(p.read_text()) if p.exists() else {}
     return AppConfig.model_validate(raw or {})
