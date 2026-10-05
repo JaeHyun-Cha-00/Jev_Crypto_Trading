@@ -343,6 +343,11 @@ export default function App() {
             </div>
           </div>
           <EquityChart points={equity} initial={paper?.initial_equity ?? 10_000} />
+          <p className="caveat small" role="note">
+            <span aria-hidden="true">▲</span> Likely better than real trading. The replay only has hourly closes, so the
+            {pol ? ` ${fmtPct(pol.stop_loss_pct, false)}` : ""} stop-loss fires on a close, never on a dip within the hour.
+            Real stops would trigger more often and fill lower.
+          </p>
           <p className="muted small">
             Jev's own hourly answers run through the trading rules · {symbols.length > 4 ? `${symbols.length} coins` : symbols.join(", ") || "no coins yet"} ·
             simulated fills, never real orders
