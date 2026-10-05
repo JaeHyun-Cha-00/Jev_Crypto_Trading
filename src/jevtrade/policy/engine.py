@@ -26,6 +26,7 @@ class PolicyConfig(BaseModel):
     entry_threshold: float = Field(0.55, gt=0, le=1)   # min p(up) to enter
     min_edge: float = Field(0.10, ge=0, le=1)          # min p(up) - p(down)
     exit_threshold: float = Field(0.55, gt=0, le=1)    # p(down) that triggers a model exit
+    exit_min_edge: float = Field(0.0, ge=0, le=1)      # ...when p(down) - p(up) is also at least this
     # Sizing is risk-based: notional = equity * risk_per_trade / stop distance,
     # capped at max_position_frac of equity and by room under max_gross_exposure.
     risk_per_trade: float = Field(0.01, gt=0, le=1)    # equity lost if the stop is hit
@@ -203,10 +204,13 @@ class Policy:
             if c.max_holding_bars is not None and held >= c.max_holding_bars:
                 return Action("exit", symbol, f"max_holding: held {held} bars >= {c.max_holding_bars}",
                               details=probs)
-            if usable and p_down >= c.exit_threshold:
-                return Action("exit", symbol, f"model_exit: p_down {p_down:.3f} >= {c.exit_threshold}",
+            if usable and p_down >= c.exit_threshold and p_down - p_up >= c.exit_min_edge:
+                return Action("exit", symbol, f"model_exit: p_down {p_down:.3f} >= {c.exit_threshold}, "
+                                              f"edge {p_down - p_up:.3f} >= {c.exit_min_edge}",
                               passed_threshold=True, details=probs)
-            why = "model abstained" if not usable else f"p_down {p_down:.3f} < {c.exit_threshold}"
+            why = ("model abstained" if not usable else
+                   f"p_down {p_down:.3f} (sell at {c.exit_threshold}), edge {p_down - p_up:.3f} "
+                   f"(sell at {c.exit_min_edge})")
             return Action("hold", symbol, f"hold: {why}", details=probs)
 
         # Flat: check every gate and record the first one that blocks.

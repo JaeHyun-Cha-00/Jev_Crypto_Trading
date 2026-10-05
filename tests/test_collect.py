@@ -219,16 +219,18 @@ def test_records_split_by_candle_day(tmp_path):
 
 
 def test_outcomes_logged_once_after_horizon(tmp_path):
+    h = load_config().decision.horizon_bars
     _collector(tmp_path, Transport(), max_backfill=1).run(_now(1200))
     assert not (tmp_path / "outcomes").exists() or not list((tmp_path / "outcomes").glob("*"))
-    for k in range(1201, 1206):
+    for k in range(1201, 1202 + h):
         _collector(tmp_path, Transport(), max_backfill=1).run(_now(k))
     outs = [json.loads(line) for p in (tmp_path / "outcomes").glob("*.jsonl")
             for line in p.read_text().splitlines()]
     keys = [(o["symbol"], o["candle_ts"]) for o in outs]
     assert len(keys) == len(set(keys))
-    # Decisions at 1200 and 1201 have closed their 4-bar horizon by candle 1205.
+    # Decisions at 1200 and 1201 have closed their h-bar horizon by candle 1201 + h.
     assert {ts for _, ts in keys} == {T0 + 1200 * H, T0 + 1201 * H}
+    assert {o["horizon_bars"] for o in outs} == {h}
 
 
 def test_outcome_labels():

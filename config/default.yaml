@@ -43,9 +43,12 @@ state:
 
 decision:
   model: mock                # mock | baseline | jev
-  horizon_bars: 4            # direction horizon: 4 bars = 4 hours on 1h candles
-  flat_band_pct: 1.0         # "up" > +1%, "down" < -1%, otherwise "flat"
-  adverse_move_pct: 3.0      # matches policy.stop_loss_pct; see docs/jev_prompt.md
+  # Jev is asked about the next 24 hours and a 3% band: a Robinhood round trip
+  # costs ~2%, so "up" means a move that still pays after costs. Over 180 days
+  # of these coins a 4-hour, 1% "up" averaged only +2.5%.
+  horizon_bars: 24           # direction horizon: 24 bars = 24 hours on 1h candles
+  flat_band_pct: 3.0         # "up" > +3%, "down" < -3%, otherwise "flat"
+  adverse_move_pct: 8.0      # matches policy.stop_loss_pct; see docs/jev_prompt.md
   mock_abstain_rate: 0.1
   baseline_fast: 20
   baseline_slow: 50
@@ -59,13 +62,17 @@ decision:
     price_per_input_token_usd: 0.000000042   # $0.042 / Mtok input, output free
 
 policy:                      # all risk limits live here, enforced in code
-  entry_threshold: 0.55      # min p(up) to open a long
-  min_edge: 0.10             # min p(up) - p(down)
-  exit_threshold: 0.55       # p(down) that closes a long
+  entry_threshold: 0.60      # min p(up) to open a long
+  min_edge: 0.40             # min p(up) - p(down)
+  exit_threshold: 0.40       # p(down) that closes a long...
+  exit_min_edge: 0.30        # ...when p(down) - p(up) is also at least this
   # Sizing is risk-based: notional = equity x risk_per_trade / stop distance,
-  # capped at max_position_frac. With a 3% stop that is 33% of equity per position.
+  # capped at max_position_frac. With an 8% stop that is 12.5% of equity per
+  # position, so up to 4 coins fit under max_gross_exposure.
   risk_per_trade: 0.01       # equity at risk if the stop is hit
-  stop_loss_pct: 0.03
+  # 8%: with no time exit a position is held for days, and over the last 180
+  # days these coins dipped 3% within 3 days 62% of the time (8%: 21%).
+  stop_loss_pct: 0.08
   stop_slippage_bps: 5       # stops trigger on the bar low; fill at stop (or gap open) less this
   max_position_frac: 0.50    # per-symbol notional / equity
   max_gross_exposure: 0.50
@@ -73,10 +80,11 @@ policy:                      # all risk limits live here, enforced in code
   max_daily_loss_pct: 0.03   # blocks new entries for the rest of the UTC day
   cooldown_after_losses: 3
   cooldown_bars: 24
-  min_trade_interval_bars: 4 # bars after an exit before the same symbol can re-enter
+  min_trade_interval_bars: 0 # bars after an exit before the same symbol can re-enter (0 = right away)
   # max_holding_bars defaults to decision.horizon_bars (4); set it here to override.
   max_holding_bars_by_model: # per decision model; null = no time exit
     baseline: null           # exits when the SMA crosses back (or on the stop)
+    jev: null                # holds until p(down) >= exit_threshold or the stop
 
 backtest:                    # python -m jevtrade.backtest
   initial_equity: 10000
@@ -115,6 +123,12 @@ jev_paper:                   # the dashboard's Jev portfolio, replayed from the 
   ref_volume_usd: 5000000    # hourly Coinbase dollar volume (median of the last 24 logged hours)
   volume_bars: 24
   max_volume_frac: 0.01      # a buy is at most 1% of that hourly dollar volume; null = no cap
+  # Skill gate: buy only while Jev's buy signals of the last 7 days (every answer
+  # that met the buy thresholds) returned more than their round-trip cost and
+  # more than the average coin over the next 24 hours. Until 1000 of them have
+  # resolved (about 4 days after a fresh start), nothing is bought. null = no gate.
+  gate_lookback_hours: 168
+  gate_min_signals: 1000
 
 report:                      # python -m jevtrade.report [--day YYYY-MM-DD]
   output_dir: reports/out    # <output_dir>/<run id>/<day>.md and .json (git-ignored)
@@ -136,7 +150,9 @@ forward_log:                 # the dashboard's "Jev forward log": the collect wo
   # Fresh start (candle open, UTC). The collect workflow never asks Jev about an
   # earlier candle (its backfill stops here), and the dashboard ignores earlier
   # lines, so the portfolio starts at its full balance from this hour. null: no cutoff.
-  start: "2026-10-05T06:00:00Z"
+  # 2026-10-05T17:00Z: restarted when the direction question moved from 4 hours
+  # and 1% to 24 hours and 3%; earlier lines answered the old question.
+  start: "2026-10-05T17:00:00Z"
 
 market:                      # the dashboard's live coin list and coin pages: public Coinbase data, no keys
   enabled: true

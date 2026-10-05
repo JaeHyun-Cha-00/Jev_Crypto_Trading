@@ -30,16 +30,24 @@ same order the backtest and paper loop use: held coins first, then by edge
 (p_up - p_down), highest first, so when the exposure caps leave room for only
 a few entries the slots go to the coins Jev was most confident about, not the
 alphabetically first ones.
+
+With `jev_paper.gate_lookback_hours` set, a skill gate holds back new buys
+while Jev's recent buy signals would not have paid (`SkillGate`). Held coins
+still sell on Jev's answer and the stop.
 """
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import accumulate
 from statistics import median
+from typing import Callable
 
 from ..decision.base import Decision
+from ..policy.engine import Action, PolicyConfig
 from ..sim import SimState, Simulator, Trade
 
 
@@ -131,6 +139,81 @@ def _dollar_volumes(bars: dict[str, dict[int, Bar]], n: int) -> dict[str, dict[i
     return out
 
 
+@dataclass(frozen=True)
+class Gate:
+    """Whether new buys are allowed at one hour, and why."""
+    open: bool
+    signals: int                 # resolved signals in the lookback window
+    avg_net: float | None        # their mean return after a round trip of costs
+    avg_excess: float | None     # their mean return minus the average coin's over the same hours
+    reason: str
+
+
+class SkillGate:
+    """Jev's recent buy signals, scored by what they went on to return.
+
+    A signal is a logged answer that met the policy's buy thresholds, whether
+    or not the account bought it. It resolves `horizon_bars` later at that
+    hour's logged close. Its net return pays a round trip of the spread,
+    slippage and fee the coin had when the signal was given; its excess
+    return is its return minus the average logged coin's over the same hours,
+    so a market-wide move doesn't count as Jev's skill.
+
+    At hour `ts` the gate is open when the signals given in the last
+    `gate_lookback_hours` that have resolved by then number at least
+    `gate_min_signals`, made money after costs on average, and beat the
+    average coin on average.
+    """
+
+    def __init__(self, decisions: dict, bars: dict[str, dict[int, Bar]], pcfg: PolicyConfig, paper,
+                 volume: Callable[[str, int], float | None], horizon_bars: int, tf_ms: int):
+        self.lookback_ms = paper.gate_lookback_hours * 3_600_000
+        self.hours = paper.gate_lookback_hours
+        self.min_signals = paper.gate_min_signals
+        self.horizon_ms = horizon_bars * tf_ms
+
+        def ret(sym: str, t: int) -> float | None:
+            start, end = bars[sym].get(t), bars[sym].get(t + self.horizon_ms)
+            return None if start is None or end is None else end.close / start.close - 1
+
+        by_hour: dict[int, list[float]] = defaultdict(list)
+        for sym in bars:
+            for t in bars[sym]:
+                r = ret(sym, t)
+                if r is not None:
+                    by_hour[t].append(r)
+        market = {t: sum(rs) / len(rs) for t, rs in by_hour.items()}
+
+        signals = []
+        for (sym, t), row in decisions.items():
+            d = _decision(row)
+            if d is None or d.abstain or sym not in bars:
+                continue
+            p_up, p_down = d.p(pcfg.question, pcfg.up_option), d.p(pcfg.question, pcfg.down_option)
+            r = ret(sym, t)
+            if p_up < pcfg.entry_threshold or p_up - p_down < pcfg.min_edge or r is None:
+                continue
+            side = (paper.spread_for(volume(sym, t)) + paper.slippage_bps + paper.fee_bps) / 10_000
+            signals.append((t, r - 2 * side, r - market[t]))
+        signals.sort()
+        self.ts = [t for t, _, _ in signals]
+        self.cum_net = [0.0, *accumulate(n for _, n, _ in signals)]
+        self.cum_excess = [0.0, *accumulate(x for _, _, x in signals)]
+
+    def at(self, ts: int) -> Gate:
+        lo = bisect_left(self.ts, ts - self.lookback_ms)
+        hi = bisect_right(self.ts, ts - self.horizon_ms)   # resolved by this hour's close
+        n = max(hi - lo, 0)
+        if n < self.min_signals:
+            return Gate(False, n, None, None, f"skill_gate: {n} of {self.min_signals} buy signals from "
+                                              f"the last {self.hours}h resolved so far")
+        net = (self.cum_net[hi] - self.cum_net[lo]) / n
+        excess = (self.cum_excess[hi] - self.cum_excess[lo]) / n
+        return Gate(net > 0 and excess > 0, n, net, excess,
+                    f"skill_gate: last {self.hours}h of buy signals averaged {net:+.2%} after costs, "
+                    f"{excess:+.2%} vs the average coin ({n} signals)")
+
+
 def _trade(t: Trade) -> dict:
     return {"symbol": t.symbol, "entry_ts": t.entry_ts, "entry_price": t.entry_price, "exit_ts": t.exit_ts,
             "exit_price": t.exit_price, "qty": t.qty, "fees": t.fees, "pnl": t.pnl, "ret": t.ret,
@@ -146,8 +229,11 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
             "spread_bps": {"min": paper.spread_bps, "max": paper.spread_bps + paper.thin_extra_bps},
             "max_volume_frac": paper.max_volume_frac,
             "policy": {"entry_threshold": pcfg.entry_threshold, "min_edge": pcfg.min_edge,
-                       "exit_threshold": pcfg.exit_threshold, "stop_loss_pct": pcfg.stop_loss_pct,
-                       "max_holding_bars": pcfg.max_holding_bars}}
+                       "exit_threshold": pcfg.exit_threshold, "exit_min_edge": pcfg.exit_min_edge,
+                       "stop_loss_pct": pcfg.stop_loss_pct, "max_holding_bars": pcfg.max_holding_bars},
+            "gate": None if paper.gate_lookback_hours is None else
+                    {"lookback_hours": paper.gate_lookback_hours, "min_signals": paper.gate_min_signals,
+                     "open": False, "signals": 0, "avg_net": None, "avg_excess": None, "reason": None}}
     bars = _bars(rows, tf_ms)
     timeline = sorted({ts for b in bars.values() for ts in b})
     if not timeline:
@@ -167,6 +253,9 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
 
     sim = Simulator(pcfg, tf_ms, paper.fee_bps, paper.slippage_bps,
                     spread_bps=lambda s, t: paper.spread_for(volume(s, t)), max_notional=max_notional)
+    skill = (SkillGate(decisions, bars, pcfg, paper, volume, app_cfg.decision.horizon_bars, tf_ms)
+             if paper.gate_lookback_hours is not None else None)
+    gate: Gate | None = None
     st = SimState.new(initial, timeline[0])
     trades: list[Trade] = []
     curve, actions = [], []
@@ -175,6 +264,7 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
     due: dict[str, int] = {}   # pending order -> when the run that queued it happened (ms)
 
     for ts in timeline:
+        gate = skill.at(ts) if skill is not None else None
         sim.begin_bar(st, ts)
         now = {s: b[ts] for s, b in bars.items() if ts in b}
         # An order fills in the hour its run happened, at the price estimated for that moment.
@@ -195,6 +285,9 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
             # and keep the waiting order unless this hour's answer queues a new one.
             waiting = st.pending.pop(sym) if sym in st.pending and sym not in st.open else None
             action, trade = sim.on_close(st, sym, ts, now[sym], d)
+            if action.kind == "enter" and gate is not None and not gate.open:
+                st.pending.pop(sym, None)   # held back: the buy is never queued
+                action = Action("skip", sym, gate.reason, passed_threshold=True, details=action.details)
             if waiting is not None and sym not in st.pending:
                 st.pending[sym] = waiting
             counts[action.kind] += 1
@@ -217,6 +310,9 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
         ts_ = [t for t in trades if t.symbol == sym]
         per_symbol[sym] = {"trades": len(ts_), "pnl": sum(t.pnl for t in ts_),
                            "buys": sum(1 for a in actions if a["symbol"] == sym and a["action"] == "enter")}
+    if gate is not None:
+        base["gate"].update(open=gate.open, signals=gate.signals, avg_net=gate.avg_net,
+                            avg_excess=gate.avg_excess, reason=gate.reason)
     return {
         **base,
         "equity": eq, "cash": st.cash, "total_return": eq / initial - 1, "drawdown": eq / peak - 1,

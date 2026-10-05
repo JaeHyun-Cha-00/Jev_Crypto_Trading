@@ -205,3 +205,56 @@ def test_buys_are_capped_at_a_share_of_hourly_dollar_volume():
     cfg.jev_paper.max_volume_frac = None
     [p] = run(rows, cfg)["positions"]
     assert p["qty"] * p["entry_price"] == pytest.approx(10_000 / 3, rel=1e-3)
+
+
+def gated(lookback, min_signals):
+    """Old costs, no time exit, a wide stop, and the skill gate on (horizon: 4 bars)."""
+    cfg = old_costs()
+    cfg.jev_paper.gate_lookback_hours = lookback
+    cfg.jev_paper.gate_min_signals = min_signals
+    cfg.policy = cfg.policy.model_copy(update={"max_holding_bars_by_model": {"jev": None},
+                                               "stop_loss_pct": 0.5})
+    return cfg
+
+
+def test_skill_gate_waits_for_enough_resolved_signals():
+    rows = [row("BTC/USD", i, 100.0 + i, up=0.7, down=0.0) for i in range(8)]
+    r = run(rows, gated(24, 1000))
+    assert r["buys"] == [] and r["positions"] == [] and r["pending"] == []
+    blocked = [a for a in r["actions"] if a["reason"].startswith("skill_gate")]
+    assert len(blocked) == 8 and "of 1000 buy signals" in blocked[0]["reason"]
+    assert r["gate"]["open"] is False and r["gate"]["signals"] == 4   # hours 0-3 resolved by hour 7
+
+
+def test_skill_gate_opens_once_signals_paid_and_beat_the_average_coin():
+    rows = [row("BTC/USD", i, 100.0 + 2 * i, up=0.7, down=0.0) for i in range(8)]
+    rows += [row("ETH/USD", i, 50.0) for i in range(8)]   # flat: the average coin rose less than BTC
+    r = run(rows, gated(24, 2))
+    # Hour 0's and 1's signals resolve at hours 4 and 5: the first buy waits for hour 5.
+    assert [(b["symbol"], b["bar_ts"]) for b in r["buys"]] == [("BTC/USD", T0 + 5 * H)]
+    assert all(a["reason"].startswith("skill_gate") for a in r["actions"]
+               if a["symbol"] == "BTC/USD" and a["bar_ts"] < T0 + 5 * H)
+    g = r["gate"]
+    assert g["open"] is True and g["avg_net"] > 0 and g["avg_excess"] > 0
+
+
+def test_skill_gate_stays_closed_when_signals_lost_money():
+    rows = [row("BTC/USD", i, 100.0 - 2 * i, up=0.7, down=0.0) for i in range(10)]
+    rows += [row("ETH/USD", i, 50.0) for i in range(10)]
+    r = run(rows, gated(24, 1))
+    assert r["buys"] == []
+    assert "after costs" in r["gate"]["reason"] and r["gate"]["avg_net"] < 0
+
+
+def test_skill_gate_never_blocks_a_sale():
+    # Signals pay early (gate opens, BTC is bought), then lose (gate closes); Jev's later
+    # "down" answer still sells the coin.
+    closes = [100, 102, 104, 106, 108, 110, 100, 98, 96, 94, 92]
+    rows = [row("BTC/USD", i, float(c), up=0.7, down=0.0) for i, c in enumerate(closes[:9])]
+    rows += [row("BTC/USD", 9, 94.0, up=0.0, down=0.7), row("BTC/USD", 10, 92.0)]
+    rows += [row("ETH/USD", i, 50.0) for i in range(11)]
+    r = run(rows, gated(5, 1))
+    assert [b["bar_ts"] for b in r["buys"]] == [T0 + 4 * H]
+    [t] = r["trades"]
+    assert t["exit_reason"].startswith("model_exit") and t["exit_ts"] == T0 + 10 * H
+    assert r["gate"]["open"] is False

@@ -136,7 +136,16 @@ export interface JevPaper {
   spread_bps: { min: number; max: number };
   /** a buy is at most this share of the coin's median hourly dollar volume; null = no cap */
   max_volume_frac: number | null;
-  policy: { entry_threshold: number; min_edge: number; exit_threshold: number; stop_loss_pct: number; max_holding_bars: number | null };
+  policy: {
+    entry_threshold: number; min_edge: number; exit_threshold: number; exit_min_edge: number;
+    stop_loss_pct: number; max_holding_bars: number | null;
+  };
+  /** skill gate: buys only while Jev's recent buy signals paid; null = no gate */
+  gate: {
+    lookback_hours: number; min_signals: number; open: boolean; signals: number;
+    /** mean return of those signals after a round trip of costs, and vs the average coin */
+    avg_net: number | null; avg_excess: number | null; reason: string | null;
+  } | null;
   equity: number;
   cash: number;
   total_return: number;

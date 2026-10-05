@@ -21,24 +21,29 @@ because TypeSafe recommends named fields when state has several parts.
 
 ## Config
 
-| Setting | Default | Used in |
+| Setting | `config/default.yaml` | Used in |
 | :- | :- | :- |
-| `decision.horizon_bars` | `4` (4 hours on 1h candles) | `direction`, `adverse_move` |
-| `decision.flat_band_pct` | `1.0` | `direction`: up > +1%, down < -1%, otherwise flat |
-| `decision.adverse_move_pct` | `3.0` (matches `policy.stop_loss_pct`) | `adverse_move` |
+| `decision.horizon_bars` | `24` (24 hours on 1h candles) | `direction`, `adverse_move` |
+| `decision.flat_band_pct` | `3.0` | `direction`: up > +3%, down < -3%, otherwise flat |
+| `decision.adverse_move_pct` | `8.0` (matches `policy.stop_loss_pct`) | `adverse_move` |
 | `data.timeframe` | `1h` | horizon wording |
 
-## The four questions (as sent with the default config)
+The band is wider than a Robinhood round trip (~2% in spread), so an `up`
+answer is a move that still pays after costs. Until 2026-10-05 the questions
+asked about 4 hours and a 1% band (adverse move 3%); a 4-hour move past 1%
+averaged only about 2.5% on these coins, barely more than the costs.
+
+## The four questions (as sent with config/default.yaml)
 
 ### 1. `direction` (Choice)
 
-**Instructions:** Given the market state, where will this asset's close price be 4 hours (4 bars of 1h) after the most recent closed bar, relative to that bar's close?
+**Instructions:** Given the market state, where will this asset's close price be 24 hours (24 bars of 1h) after the most recent closed bar, relative to that bar's close?
 
 **Criteria:**
 
-- `up`: The close is more than 1% above the last close (change above +1%).
-- `flat`: The change is between -1% and +1% inclusive.
-- `down`: The close is more than 1% below the last close (change below -1%).
+- `up`: The close is more than 3% above the last close (change above +3%).
+- `flat`: The change is between -3% and +3% inclusive.
+- `down`: The close is more than 3% below the last close (change below -3%).
 
 ### 2. `regime` (Choice)
 
@@ -53,12 +58,12 @@ because TypeSafe recommends named fields when state has several parts.
 
 ### 3. `adverse_move` (Noul)
 
-**Instructions:** Within the next 4 hours (4 bars of 1h) after the most recent closed bar, will this asset's price at any point trade more than 3% below that bar's close?
+**Instructions:** Within the next 24 hours (24 bars of 1h) after the most recent closed bar, will this asset's price at any point trade more than 8% below that bar's close?
 
 **Criteria:**
 
-- `true`: Price dips more than 3% below the last close at some point in the window.
-- `false`: Price never falls more than 3% below the last close in the window.
+- `true`: Price dips more than 8% below the last close at some point in the window.
+- `false`: Price never falls more than 8% below the last close in the window.
 
 ### 4. `clear_signal` (Noul)
 
