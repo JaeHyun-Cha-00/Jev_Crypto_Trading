@@ -26,6 +26,21 @@ services:
       timeout: 10s
       retries: 3
 
+  # Backstop for GitHub's hourly schedule, which can skip runs: at :20 it starts
+  # the collect workflow if no run started this hour. Needs GITHUB_TOKEN with
+  # "Actions: read and write"; without one it exits and stays stopped.
+  collect-kick:
+    image: jevtrade:latest
+    pull_policy: never          # built by the api service
+    restart: on-failure:3
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./config:/app/config:ro
+    command: ["python", "-m", "jevtrade.collect.kick"]
+    depends_on: [api]
+
   web:
     build: ./web
     image: jevtrade-web:latest
