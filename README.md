@@ -445,7 +445,7 @@ It follows the OS light or dark setting and works down to phone width. Set
 
 ### Forward data collection (GitHub Actions)
 
-`.github/workflows/collect.yml` runs at 11 minutes past every hour (and on
+`.github/workflows/collect.yml` runs at 1 minute past every hour (and on
 demand via **Run workflow**). Each run:
 
 - reads the coin list live (`data.symbols_live`): every Robinhood-tradable,
@@ -482,7 +482,7 @@ python -m jevtrade.collect --out data-log --max-backfill 24
 ```
 
 GitHub can delay or skip scheduled runs. The `collect-kick` service in
-`docker-compose.yml` is a backstop: at 20 minutes past each hour it asks GitHub
+`docker-compose.yml` is a backstop: from 1 minute past each hour it asks GitHub
 whether a collect run started this hour and, if none did, starts one (the run
 still happens in GitHub Actions). It needs `GITHUB_TOKEN` with **Actions: read
 and write** on the repo, plus **Contents: read** for the dashboard; without a
@@ -533,8 +533,8 @@ instance hours a month, enough for one service around the clock, and needs no ca
 
 Because the page is on the public internet, it asks for `DASHBOARD_PASSWORD`
 (any user name). Only `/api/health` is open, for Render's health check. The
-same service runs the collect backstop (`JEVTRADE_KICK=1`, at :25, after the
-local `collect-kick` at :20, so both can run) and pings itself every 10
+same service runs the collect backstop (`JEVTRADE_KICK=1`, from :03, after the
+local `collect-kick` at :01, so both can run) and pings itself every 10
 minutes, because free services otherwise sleep after 15 idle minutes.
 
 1. Sign in at https://dashboard.render.com with GitHub and let Render see this repo.
