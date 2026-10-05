@@ -30,9 +30,8 @@ from pydantic import BaseModel, Field
 from ..decision.base import Decision, DecisionModel, QuestionSpec
 from ..decision.log import DecisionLog
 from ..features.compute import FeatureConfig, compute_features
-from ..policy.engine import (
-    AccountView, Action, Policy, PolicyConfig, Position, RiskState, register_trade_result, roll_day,
-)
+from ..policy.engine import PolicyConfig
+from ..sim import SimState, Simulator, Trade
 from ..state.builder import StateConfig, build_state
 
 
@@ -45,22 +44,6 @@ class BacktestConfig(BaseModel):
     output_dir: str = "data/backtests"
     log_decisions: bool = True     # write decisions to the decisions table under the run id
     log_inputs: bool = False       # also store the state text (large: ~2KB per decision)
-
-
-@dataclass
-class Trade:
-    symbol: str
-    entry_ts: int
-    entry_price: float
-    exit_ts: int
-    exit_price: float
-    qty: float
-    fees: float
-    pnl: float           # net of fees on both sides
-    ret: float           # pnl / entry notional
-    bars_held: int       # bars the position was open for (a next-open exit excludes its bar)
-    exit_reason: str
-    entry_reason: str
 
 
 @dataclass
@@ -77,19 +60,6 @@ class BacktestResult:
     counts: dict[str, int] = field(default_factory=dict)  # decisions, abstains, actions by kind
     contamination: str = "n/a"
     sizing: dict = field(default_factory=dict)  # PolicyConfig.describe_sizing at the run's settings
-
-
-@dataclass
-class _Open:
-    pos: Position
-    entry_fee: float
-    entry_reason: str
-
-
-@dataclass
-class _Pending:
-    action: Action
-    ref_close: float
 
 
 def _ts_ms(ix: pd.Timestamp) -> int:
@@ -135,9 +105,9 @@ class Backtester:
         self.questions = questions
         # max_holding_bars can differ per model (baseline exits on its own signal).
         policy_cfg = policy_cfg.for_model(model.name)
-        self.policy = Policy(policy_cfg, tf_ms)
         self.pcfg = policy_cfg
         self.cfg = bt_cfg
+        self.sim = Simulator(policy_cfg, tf_ms, bt_cfg.fee_bps, bt_cfg.slippage_bps)
         self.tf_ms = tf_ms
         self.timeframe = timeframe
         self.horizon_bars = horizon_bars
@@ -147,17 +117,6 @@ class Backtester:
         self.run_id = run_id or (
             f"bt-{model.name}-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
         )
-
-    # -- fills -------------------------------------------------------------
-
-    def _buy_fill(self, open_px: float) -> float:
-        return open_px * (1 + self.cfg.slippage_bps / 10_000)
-
-    def _sell_fill(self, open_px: float) -> float:
-        return open_px * (1 - self.cfg.slippage_bps / 10_000)
-
-    def _fee(self, notional: float) -> float:
-        return abs(notional) * self.cfg.fee_bps / 10_000
 
     # -- main loop -----------------------------------------------------------
 
@@ -182,116 +141,58 @@ class Backtester:
         row_of = {sym: {_ts_ms(ix): i for i, ix in enumerate(df.index)} for sym, (df, _) in data.items()}
         window = state_window(self.state_cfg, self.feature_cfg)
 
-        cash = self.cfg.initial_equity
-        open_: dict[str, _Open] = {}
-        pending: dict[str, _Pending] = {}
-        marks: dict[str, float] = {}
-        risk = RiskState(day_start_equity=cash, day=timeline[0] // 86_400_000)
+        st = SimState.new(self.cfg.initial_equity, timeline[0])
         trades: list[Trade] = []
         curve: list[tuple[int, float]] = []
         counts: dict[str, int] = {"decisions": 0, "abstains": 0, "no_state": 0}
-        first_close: dict[str, float] = {}
-
-        def equity() -> float:
-            return cash + sum(o.pos.qty * marks.get(s, o.pos.entry_price) for s, o in open_.items())
-
-        def close_position(sym: str, ts: int, px: float, reason: str, at_open: bool) -> None:
-            nonlocal cash
-            o = open_.pop(sym)
-            fee = self._fee(o.pos.qty * px)
-            cash += o.pos.qty * px - fee
-            cost = o.pos.qty * o.pos.entry_price
-            pnl = o.pos.qty * px - cost - fee - o.entry_fee
-            bars = (ts - o.pos.entry_ts) // self.tf_ms + (0 if at_open else 1)
-            trades.append(Trade(sym, o.pos.entry_ts, o.pos.entry_price, ts, px, o.pos.qty,
-                                fee + o.entry_fee, pnl, pnl / cost if cost else 0.0, bars,
-                                reason, o.entry_reason))
-            register_trade_result(risk, pnl, ts, self.tf_ms, self.pcfg, sym)
 
         for ts in timeline:
-            # The daily-loss baseline is equity at the previous close.
-            roll_day(risk, ts, equity())
+            self.sim.begin_bar(st, ts)
+            bars = {sym: data[sym][0].iloc[i] for sym in data if (i := row_of[sym].get(ts)) is not None}
+            trades += self.sim.fill_pending(st, ts, bars)
 
-            # 1. Orders decided at the previous close fill at this bar's open.
-            for sym in list(pending):
-                i = row_of[sym].get(ts)
-                if i is None:
-                    continue  # no bar for this symbol yet (exchange gap): keep waiting
-                bar = data[sym][0].iloc[i]
-                p = pending.pop(sym)
-                if p.action.kind == "exit" and sym in open_:
-                    close_position(sym, ts, self._sell_fill(bar.open), p.action.reason, at_open=True)
-                elif p.action.kind == "enter" and sym not in open_:
-                    px = self._buy_fill(bar.open)
-                    eq = equity()
-                    qty = p.action.size_frac * eq / px
-                    fee = self._fee(qty * px)
-                    if qty * px + fee > cash:  # never borrow; long-only spot
-                        qty = max(0.0, (cash - fee) / px)
-                        fee = self._fee(qty * px)
-                    if qty <= 0:
-                        continue
-                    cash -= qty * px + fee
-                    stop = px * (1 - self.pcfg.stop_loss_pct)
-                    open_[sym] = _Open(Position(sym, qty, px, ts, stop), fee, p.action.reason)
-                    marks[sym] = bar.open
-
-            # 2. Decide on this bar's close, symbol by symbol.
+            # Decide on this bar's close, symbol by symbol.
             for sym, (df, feats) in data.items():
                 i = row_of[sym].get(ts)
                 if i is None:
                     continue
-                bar = df.iloc[i]
-                marks[sym] = bar.close
-                first_close.setdefault(sym, bar.close)
                 lo = max(0, i + 1 - window)
                 state = build_state(df.iloc[lo:i + 1], feats.iloc[lo:i + 1], self.horizon_bars,
                                     self.timeframe, self.state_cfg, self.feature_cfg)
                 decision: Decision | None = None
                 if state is None:
                     counts["no_state"] += 1
-                    if sym not in open_:
+                    if sym not in st.open:
+                        self.sim.mark(st, sym, bars[sym])
                         continue  # warm-up: nothing to decide and nothing to protect
                 else:
                     decision = self.model.decide(state, self.questions)
                     counts["decisions"] += 1
                     counts["abstains"] += int(decision.abstain)
 
-                # Pending entries count against gross exposure for later symbols.
-                positions = {s: o.pos for s, o in open_.items()}
-                for s, p in pending.items():
-                    if p.action.kind == "enter":
-                        q = p.action.size_frac * equity() / p.ref_close
-                        positions[s] = Position(s, q, p.ref_close, ts, p.ref_close)
-                acct = AccountView(equity(), positions, dict(marks), risk)
-                action = self.policy.evaluate(sym, ts, bar.close, decision, acct,
-                                              bar_open=bar.open, bar_low=bar.low)
+                action, trade = self.sim.on_close(st, sym, ts, bars[sym], decision)
                 counts[action.kind] = counts.get(action.kind, 0) + 1
-
-                if action.kind == "exit" and action.fill_price is not None:
-                    # Stop: fills inside this bar at the policy's price, not at the next open.
-                    close_position(sym, ts, action.fill_price, action.reason, at_open=False)
-                elif action.kind in ("enter", "exit"):
-                    pending[sym] = _Pending(action, bar.close)
+                if trade is not None:
+                    trades.append(trade)
 
                 if self.dlog is not None and decision is not None and self.cfg.log_decisions:
                     did = self.dlog.record(self.run_id, sym, ts, decision,
                                            state.text if self.cfg.log_inputs else None)
                     self.dlog.annotate(did, action.passed_threshold, action.kind, action.reason)
 
-            curve.append((ts, equity()))
+            curve.append((ts, st.equity()))
 
         # Close whatever is still open at the last close so every trade is counted.
         last_ts = timeline[-1]
-        for sym in list(open_):
-            close_position(sym, last_ts, marks[sym], "end_of_backtest: closed at last close",
-                           at_open=False)
+        for sym in list(st.open):
+            trades.append(self.sim.close_position(st, sym, last_ts, st.marks[sym],
+                                                  "end_of_backtest: closed at last close", at_open=False))
         if curve:
-            curve[-1] = (last_ts, equity())
+            curve[-1] = (last_ts, st.equity())
 
         eq = pd.Series([v for _, v in curve],
                        index=pd.to_datetime([t for t, _ in curve], unit="ms", utc=True), name="equity")
-        bench = {s: marks[s] / first_close[s] - 1 for s in first_close}
+        bench = {s: st.marks[s] / st.first_close[s] - 1 for s in st.first_close}
         return BacktestResult(
             run_id=self.run_id, model=self.model.name, model_version=self.model.version,
             symbols=list(data), timeframe=self.timeframe, initial_equity=self.cfg.initial_equity,

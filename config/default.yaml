@@ -70,3 +70,15 @@ backtest:                    # python -m jevtrade.backtest
   output_dir: data/backtests
   log_decisions: true        # decisions table, under the run id
   log_inputs: false          # also store each state text (~2KB per decision)
+
+paper:                       # python -m jevtrade.paper run   (simulated fills only, never real orders)
+  run_id: paper              # change it to start a fresh paper account; old rows are kept
+  initial_equity: 10000
+  fee_bps: 10                # same cost model as the backtest
+  slippage_bps: 2
+  poll_delay_s: 30           # after a candle closes, wait this long for the exchange to publish it
+  retry_s: 60                # after a failed step (network error), retry this soon
+  max_catchup_bars: 48       # after downtime, older missed bars run risk-only (stops, no new entries)
+  stall_grace_bars: 3        # process a bar without a symbol whose candle is this late
+  log_inputs: true           # keep each state text with its decision
+  lock_path: null            # default: <sqlite_path>.paper.lock
