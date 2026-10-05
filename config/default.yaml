@@ -10,3 +10,37 @@ data:
 
 storage:
   sqlite_path: data/jevtrade.sqlite
+
+features:
+  return_windows: [1, 4, 24, 72]
+  vol_windows: [24, 72]
+  volume_z_window: 24
+  rsi_period: 14
+  ma_windows: [20, 50, 200]
+
+state:
+  history_bars: 24
+  percentile_window: 720
+  target_max_tokens: 2000
+
+decision:
+  model: mock                # mock | baseline | jev (jev not implemented yet)
+  horizon_bars: 24
+  flat_band_pct: 0.5
+  mock_abstain_rate: 0.1
+  baseline_fast: 20
+  baseline_slow: 50
+
+policy:                      # all risk limits live here, enforced in code
+  entry_threshold: 0.55      # min p(up) to open a long
+  min_edge: 0.10             # min p(up) - p(down)
+  exit_threshold: 0.55       # p(down) that closes a long
+  risk_per_trade: 0.01       # equity at risk if the stop is hit
+  stop_loss_pct: 0.03
+  max_position_frac: 0.25    # per-symbol notional / equity
+  max_gross_exposure: 0.50
+  min_trade_frac: 0.01
+  max_daily_loss_pct: 0.03   # blocks new entries for the rest of the UTC day
+  cooldown_after_losses: 3
+  cooldown_bars: 24
+  max_holding_bars: 24
