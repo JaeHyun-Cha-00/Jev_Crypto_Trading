@@ -92,3 +92,12 @@ api:                         # python -m jevtrade.api   (GET only, database open
   host: 127.0.0.1            # 0.0.0.0 inside docker; keep it off the public internet
   port: 8000
   cors_origins: ["http://localhost:5173"]   # the dashboard's dev server
+
+forward_log:                 # the dashboard's "Jev forward log": the collect workflow's data-log branch
+  source: github             # github | local | off
+  repo: JaeHyun-Cha-00/jev_crypto_trading
+  branch: data-log
+  local_dir: data-log        # for source: local (e.g. `git worktree add data-log origin/data-log`)
+  refresh_seconds: 300       # re-read at most this often; on failure the last good data is kept
+  max_days: 30               # newest day files to load
+  token_env: GITHUB_TOKEN    # optional token for a private repo or higher GitHub rate limits

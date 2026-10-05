@@ -89,6 +89,83 @@ export interface BacktestRow {
   trades: number;
 }
 
+// Jev forward log (the collect workflow's data-log branch): /api/forward/*
+
+export type Direction = "up" | "flat" | "down";
+
+export interface ForwardMetrics {
+  decisions: number;
+  answered: number;
+  abstain: number;
+  error: number;
+  scored: number;
+  pending: number;
+  hits: number;
+  hit_rate: number | null;
+  realized: Record<Direction, number>;
+  baselines: {
+    majority: { label: Direction | null; hit_rate: number | null };
+    always_flat: { label: "flat"; hit_rate: number | null };
+  };
+  /** rows: predicted, columns: realized, both in `labels` order */
+  confusion: { labels: Direction[]; matrix: number[][] };
+  calibration: { lo: number; hi: number; n: number; mean_confidence: number | null; hit_rate: number | null }[];
+  direction_scores: { n: number; brier: number | null; log_loss: number | null; brier_base_rate: number | null };
+  adverse_move_scores: {
+    n: number;
+    brier: number | null;
+    log_loss: number | null;
+    base_rate: number | null;
+    brier_base_rate: number | null;
+  };
+  cost_usd: number;
+}
+
+export interface ForwardSummary {
+  source: "github" | "local" | "off";
+  location: string | null;
+  fetched_at: number | null;
+  last_called_at: string | null;
+  last_candle_ts: number | null;
+  files: number;
+  error: string | null;
+  overall: ForwardMetrics;
+  per_symbol: Record<string, ForwardMetrics>;
+}
+
+export interface ForwardOutcome {
+  horizon_bars: number;
+  close_at_horizon: number;
+  ret_pct: number;
+  direction: Direction;
+  min_low_pct: number;
+  adverse_move: boolean;
+}
+
+export interface ForwardRow {
+  symbol: string;
+  candle_ts: number;
+  candle_open: string;
+  close: number;
+  called_at: string;
+  status: "answered" | "abstain" | "error";
+  abstain_reason: string | null;
+  served_model: string | null;
+  latency_ms: number;
+  cost_usd: number | null;
+  predicted: Direction | null;
+  confidence: number | null;
+  regime: string | null;
+  /** adverse_move Noul: P(yes) */
+  p_adverse: number | null;
+  outcome: ForwardOutcome | null;
+  hit: boolean | null;
+}
+
+export const getForwardSummary = () => get<ForwardSummary>("/forward/summary");
+export const getForwardRows = (params: { symbol?: string; limit?: number } = {}) =>
+  get<ForwardRow[]>("/forward/rows", params);
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);

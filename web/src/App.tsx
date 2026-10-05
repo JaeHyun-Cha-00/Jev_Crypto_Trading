@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, get } from "./api";
-import type { BacktestRow, Config, Decision, EquityPoint, Status, Trade } from "./api";
+import { ApiError, get, getForwardRows, getForwardSummary } from "./api";
+import type { BacktestRow, Config, Decision, EquityPoint, ForwardRow, ForwardSummary, Status, Trade } from "./api";
 import { EquityChart } from "./EquityChart";
+import { ForwardLog } from "./ForwardLog";
 import { ago, fmtMoney, fmtPct, fmtPrice, fmtTime } from "./format";
 
 const REFRESH_MS = 60_000;
@@ -24,6 +25,12 @@ interface Data {
 }
 
 const empty: Data = { status: null, config: null, equity: [], trades: [], decisions: [], reports: [], backtests: [] };
+
+interface Forward {
+  summary: ForwardSummary | null;
+  rows: ForwardRow[];
+  error: string | null;
+}
 
 function Tile({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: "up" | "down" }) {
   return (
@@ -56,9 +63,14 @@ export default function App() {
   const [range, setRange] = useState<RangeId>("7d");
   const [symbol, setSymbol] = useState<string>("");
   const [report, setReport] = useState<{ day: string; markdown: string } | null>(null);
+  const [forward, setForward] = useState<Forward>({ summary: null, rows: [], error: null });
 
   const load = useCallback(async () => {
     setLoading(true);
+    // The forward log is independent of the paper account: its failures stay in its own section.
+    Promise.all([getForwardSummary(), getForwardRows({ limit: 300 })])
+      .then(([summary, rows]) => setForward({ summary, rows, error: null }))
+      .catch((e) => setForward((f) => ({ ...f, error: e instanceof Error ? e.message : String(e) })));
     try {
       const [config, equity, trades, decisions, reports, backtests] = await Promise.all([
         get<Config>("/config"),
@@ -270,6 +282,8 @@ export default function App() {
           </div>
         )}
       </section>
+
+      <ForwardLog summary={forward.summary} rows={forward.rows} symbol={symbol} error={forward.error} />
 
       <div className="two">
         <section className="card">

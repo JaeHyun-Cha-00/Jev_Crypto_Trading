@@ -11,8 +11,8 @@ x-app: &app
   image: jevtrade:latest
   restart: unless-stopped
   env_file:
-    - path: .env          # OPENROUTER_API_KEY, JEVTRADE_ALLOW_LIVE_MODEL (only for decision.model: jev)
-      required: false
+    - path: .env          # OPENROUTER_API_KEY, JEVTRADE_ALLOW_LIVE_MODEL (only for decision.model: jev),
+      required: false     # GITHUB_TOKEN (forward log on a private repo)
   volumes:
     - jevdata:/app/data
     - jevreports:/app/reports
@@ -29,6 +29,8 @@ services:
 
   api:
     <<: *app
+    # Reads the forward log from GitHub over HTTPS (forward_log in config/default.yaml);
+    # the default bridge network allows that outbound. Nothing else leaves the box.
     command: ["python", "-m", "jevtrade.api", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]
