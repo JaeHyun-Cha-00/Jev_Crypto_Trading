@@ -61,7 +61,7 @@ ignores), never from YAML.
 ```yaml
 data:
   exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken
-  symbols: [BTC/USD, ETH/USD]
+  symbols: [BTC/USD, ETH/USD, ...]  # 81 coins: Robinhood-tradable with a Coinbase USD market
   timeframe: 1h
   start: "2025-01-01T00:00:00Z"   # earliest candle kept; backfilled on coinbase
   page_limit: 300            # candles per request, clamped per exchange
@@ -87,12 +87,12 @@ python -m jevtrade.data            # sync all configured symbols up to the last 
 - The default exchange is Coinbase Exchange (ccxt id `coinbaseexchange`,
   `api.exchange.coinbase.com`). It returns at most 300 candles per request
   but pages back through full hourly history, so a fresh store is backfilled
-  to `start` (more than a year of BTC/USD and ETH/USD by default). Windows
+  to `start` (more than a year per coin by default). Windows
   with no candles, such as an outage, are stepped over and then reported as
   gaps. If `start` is moved earlier, the missing head is backfilled on the
   next sync.
-- Kraken remains available: set `exchange: kraken` (the USD symbols exist
-  there too). **Limitation:** Kraken's public OHLC endpoint returns only the
+- Kraken remains available: set `exchange: kraken` (BTC/USD and ETH/USD
+  exist there; not every coin in the default list does). **Limitation:** Kraken's public OHLC endpoint returns only the
   most recent 720 candles (about 30 days at 1h), whatever `since` is set to,
   so a Kraken store starts about 30 days back and a sync stopped for longer
   leaves an unresolved gap. Stores are keyed by exchange, so Kraken and
@@ -219,7 +219,8 @@ with `bar_open` and `bar_low`.
   id. `summary.json`, `summary.md`, `trades.csv` and `equity.csv` go to
   `backtest.output_dir/<run id>/`.
 - `--model jev` costs one API call per symbol per bar and needs
-  `--allow-live-model`. Runs that end before the pinned snapshot's date are
+  `--allow-live-model`. Over all 81 default coins since 2025 that is about
+  1.2M calls (roughly $100), so pass `--symbols` to narrow it. Runs that end before the pinned snapshot's date are
   labelled potentially contaminated (see below). Tests never call Jev.
 
 Results on Coinbase BTC/USD and ETH/USD, 1h, 2025-01-01 to 2026-10-05, with the
@@ -397,8 +398,10 @@ No trading and no simulated positions. Calls that got no response at all are
 logged with `status: "error"` and asked again on the next run. The key comes
 from the `OPENROUTER_API_KEY` repository secret (Settings → Secrets and
 variables → Actions); the run stops before any call if it is missing. Each
-call costs money: about $0.00008 at the recorded ~2,000 input tokens, so two
-symbols hourly is roughly $0.004 a day.
+call costs money: about $0.00008 at the recorded ~2,000 input tokens, so the
+default 81 coins hourly is roughly $0.16 a day (about $4.70 a month). Trim
+`data.symbols` to spend less. A coin whose candles can't be fetched is skipped
+for that run and retried the next hour; the other coins still run.
 
 Locally, against any directory:
 
