@@ -127,3 +127,36 @@ def test_rows_without_called_at_fill_at_the_next_open():
     rows = [dict(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), called_at=None), row("BTC/USD", 1, 104.0)]
     [p] = run(rows)["positions"]
     assert p["entry_ts"] == T0 + H and p["entry_price"] == pytest.approx(100.0 * 1.0002)
+
+
+def _ohlc(r, o, h, lo, v=1000.0):
+    return dict(r, open=o, high=h, low=lo, volume=v)
+
+
+def test_stop_triggers_on_the_logged_intrabar_low():
+    # Hour 2 dips 5% inside the hour but closes flat: only the real low reveals it.
+    rows = [_ohlc(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), 100.0, 100.5, 99.5),
+            _ohlc(row("BTC/USD", 1, 100.0), 100.0, 100.5, 99.5),
+            _ohlc(row("BTC/USD", 2, 100.0), 100.0, 100.5, 95.0),
+            _ohlc(row("BTC/USD", 3, 100.0), 100.0, 100.5, 99.5)]
+    [t] = run(rows)["trades"]
+    assert t["exit_reason"].startswith("stop_loss") and t["exit_ts"] == T0 + 2 * H
+    stop = 100.0 * 1.0002 * 0.97
+    assert t["exit_price"] == pytest.approx(stop * (1 - 5 / 10_000))
+    # The same hours logged with closes only never stop out.
+    closes_only = run([{k: v for k, v in r.items() if k not in ("open", "high", "low")} for r in rows])
+    assert closes_only["trades"] == [] and len(closes_only["positions"]) == 1
+
+
+def test_close_only_rows_still_open_at_the_previous_close():
+    rows = [row("BTC/USD", 0, 100.0, up=0.6, down=0.1), _ohlc(row("BTC/USD", 1, 104.0), 101.0, 105.0, 100.5)]
+    [p] = run(rows)["positions"]
+    assert p["entry_price"] == pytest.approx(101.0 * 1.0002)   # hour 1's logged open, not hour 0's close
+
+
+def test_a_late_fill_only_sees_part_of_the_hours_dip():
+    from jevtrade.api.jev_paper import Bar, _fill_bar
+    bar = Bar(100.0, 110.0, 90.0, 100.0)
+    rest = _fill_bar(bar, 0, int(0.75 * H), H)
+    assert rest.open == 100.0 and rest.low == pytest.approx(97.5) and rest.high == pytest.approx(102.5)
+    assert _fill_bar(bar, 0, 0, H) == bar
