@@ -54,6 +54,7 @@ data:
   timeframe: 1h
   start: "2025-01-01T00:00:00Z"   # earliest candle kept; backfilled on coinbase
   page_limit: 300            # candles per request, clamped per exchange
+  requests_trust_env: true   # honour HTTPS_PROXY / REQUESTS_CA_BUNDLE
 storage:
   sqlite_path: data/jevtrade.sqlite
 ```

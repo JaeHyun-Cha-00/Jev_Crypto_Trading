@@ -19,7 +19,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     cfg = load_config(args.config)
-    ex = public_exchange(cfg.data.exchange)
+    ex = public_exchange(cfg.data.exchange, cfg.data.requests_trust_env)
     store = CandleStore(connect(cfg.storage.sqlite_path))
     tf_ms = timeframe_ms(cfg.data.timeframe)
     page_limit = page_limit_for(cfg.data.exchange, cfg.data.page_limit)

@@ -44,13 +44,18 @@ def page_limit_for(exchange_id: str, configured: int) -> int:
     return min(configured, cap) if cap else configured
 
 
-def public_exchange(exchange_id: str) -> ccxt.Exchange:
-    """Build an unauthenticated ccxt exchange client."""
+def public_exchange(exchange_id: str, requests_trust_env: bool = True) -> ccxt.Exchange:
+    """Build an unauthenticated ccxt exchange client.
+
+    `requests_trust_env` makes ccxt honour HTTPS_PROXY / REQUESTS_CA_BUNDLE
+    like any other HTTP client; ccxt ignores them by default, which breaks
+    fetching behind a TLS-intercepting proxy.
+    """
     if not hasattr(ccxt, exchange_id):
         raise ValueError(f"unknown ccxt exchange: {exchange_id}")
-    # requests_trust_env: honour HTTPS_PROXY / REQUESTS_CA_BUNDLE like any
-    # other HTTP client (ccxt ignores them by default).
-    ex = getattr(ccxt, exchange_id)({"enableRateLimit": True, "requests_trust_env": True})
+    ex = getattr(ccxt, exchange_id)(
+        {"enableRateLimit": True, "requests_trust_env": requests_trust_env}
+    )
     for field in _CREDENTIAL_FIELDS:
         if getattr(ex, field, None):
             raise RuntimeError(f"refusing exchange client with credential field {field!r} set")

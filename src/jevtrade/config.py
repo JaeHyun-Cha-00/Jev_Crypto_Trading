@@ -29,6 +29,8 @@ class DataConfig(BaseModel):
     start: str = "2025-01-01T00:00:00Z"
     # Max candles per request; clamped to the exchange cap (coinbase 300, kraken 720).
     page_limit: int = 300
+    # Honour HTTPS_PROXY / REQUESTS_CA_BUNDLE env vars (ccxt ignores them by default).
+    requests_trust_env: bool = True
 
     @field_validator("symbols")
     @classmethod

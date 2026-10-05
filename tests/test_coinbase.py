@@ -128,3 +128,14 @@ def test_ccxt_coinbase_request_shape_and_parsing(monkeypatch):
     assert requests[0]["start"].startswith("2024-01-01T00:00:00")
     assert ex.parse8601(requests[0]["end"]) == T0 + 299 * H
     assert isinstance(ex, ccxt.coinbaseexchange)
+
+
+def test_requests_trust_env_is_configurable(tmp_path):
+    assert load_config().data.requests_trust_env is True
+    assert public_exchange("coinbaseexchange").session.trust_env is True
+    p = tmp_path / "c.yaml"
+    p.write_text("data:\n  requests_trust_env: false\n")
+    cfg = load_config(p)
+    assert cfg.data.requests_trust_env is False
+    ex = public_exchange(cfg.data.exchange, cfg.data.requests_trust_env)
+    assert ex.session.trust_env is False
