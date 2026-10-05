@@ -165,3 +165,35 @@ def test_forward_paper_replays_logged_answers(env):
     assert {a["symbol"] for a in r["actions"]} <= {"BTC/USD", "ETH/USD"}
     assert len(c.get("/api/forward/paper", params={"actions": 1}).json()["actions"]) == 1
     assert c.post("/api/forward/paper").status_code == 405
+
+
+def test_forward_paper_starts_at_paper_start(env):
+    from datetime import datetime, timezone
+
+    from jevtrade.api.forward import ForwardLog
+    from jevtrade.api.settings import ForwardLogConfig
+    from test_forward import FakeGitHub
+
+    cfg, _ = env
+    first = 1791086400000   # first fixture candle, 2026-10-04T04:00Z
+    for start_ms, expect_rows in ((first + 3_600_000, True), (first + 30 * 86_400_000, False)):
+        c2 = cfg.model_copy(deep=True)
+        c2.forward_log.paper_start = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
+        fwd = ForwardLog(ForwardLogConfig(source="github", repo="me/repo"), http_get=FakeGitHub())
+        r = TestClient(create_app(c2, forward_log=fwd)).get("/api/forward/paper").json()
+        assert r["tracking_since"] == start_ms
+        assert all(a["bar_ts"] >= start_ms for a in r["actions"])
+        assert bool(r["actions"]) is expect_rows
+        if not expect_rows:   # nothing logged since the start yet: a fresh account
+            assert r["equity"] == cfg.paper.initial_equity and r["trades"] == [] and r["curve"] == []
+        # The forward-log stats still include the earlier calls.
+        s = TestClient(create_app(c2, forward_log=fwd)).get("/api/forward/summary").json()
+        assert s["overall"]["decisions"] == 7
+
+
+def test_paper_start_reads_naive_and_zoned_times():
+    from jevtrade.api.settings import ForwardLogConfig
+
+    assert ForwardLogConfig().paper_start_ms() is None
+    z = ForwardLogConfig(paper_start="2026-10-05T07:00:00Z").paper_start_ms()
+    assert z == ForwardLogConfig(paper_start="2026-10-05T07:00:00").paper_start_ms() == 1791183600000

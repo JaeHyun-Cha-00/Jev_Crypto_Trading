@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -24,3 +25,12 @@ class ForwardLogConfig(BaseModel):
     max_days: int = Field(30, ge=1)  # newest day files to load
     token_env: str = "GITHUB_TOKEN"  # optional; private repos and higher rate limits
     timeout_s: float = Field(20, gt=0)
+    # The Jev paper portfolio counts only candles opening at or after this time
+    # (UTC). Older calls stay in the forward-log stats. None: every logged call.
+    paper_start: datetime | None = None
+
+    def paper_start_ms(self) -> int | None:
+        if self.paper_start is None:
+            return None
+        ts = self.paper_start if self.paper_start.tzinfo else self.paper_start.replace(tzinfo=timezone.utc)
+        return int(ts.timestamp() * 1000)

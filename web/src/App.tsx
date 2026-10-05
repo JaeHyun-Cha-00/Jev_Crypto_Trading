@@ -145,7 +145,10 @@ function Bought({ paper, symbol }: { paper: JevPaper | null; symbol: string }) {
     <section className="card bought">
       <div className="card-head">
         <h2>What Jev bought</h2>
-        <span className="muted small">{count === 0 ? "" : `${held.length} holding · ${pending.length} buying · ${sold.length} sold`}</span>
+        <span className="muted small">
+          {paper?.tracking_since != null && `Since ${fmtTime(paper.tracking_since)} ${TZ}`}
+          {count === 0 ? "" : ` · ${held.length} holding · ${pending.length} buying · ${sold.length} sold`}
+        </span>
       </div>
       {count === 0 ? (
         <p className="muted">
@@ -318,14 +321,19 @@ export default function App() {
         <section className="card hero">
           <div className="hero-top">
             <div>
-              <div className="hero-label">Jev paper portfolio</div>
+              <div className="hero-label">
+                Jev paper portfolio
+                {paper?.tracking_since != null && (
+                  <span className="since"> · Tracking since {fmtTime(paper.tracking_since)} {TZ}</span>
+                )}
+              </div>
               <div className="balance">
                 {fmtMoney(paper?.equity)}
                 <span className="ccy">USD</span>
               </div>
               <div className="deltas">
                 <span className={`pill ${tone(paper?.total_return) ?? ""}`}>{fmtPct(paper?.total_return)}</span>
-                <span>since the first logged call</span>
+                <span>since tracking started</span>
                 {rangeReturn !== null && range !== "all" && (
                   <>
                     <span className={`pill ${tone(rangeReturn) ?? ""}`}>{fmtPct(rangeReturn)}</span>
@@ -488,8 +496,8 @@ export default function App() {
         <ForwardLog summary={summary} rows={data.rows} symbol={symbol} error={null} />
 
         <footer className="muted small">
-          Read-only view of Jev's forward log. Refreshes every minute. Last logged hour{" "}
-          {paper?.last_bar_ts ? fmtTime(paper.last_bar_ts) : "n/a"} {TZ}. All times are your local time ({TZ_NAME}).
+          Read-only view of Jev's forward log. Refreshes every minute. Last tracked hour{" "}
+          {paper?.last_bar_ts ? `${fmtTime(paper.last_bar_ts)} ${TZ}` : "none yet"}. All times are your local time ({TZ_NAME}).
         </footer>
       </main>
     </>

@@ -386,7 +386,10 @@ loop and backtests are no longer shown. It shows:
 The replay prices each hour from the logged closes (an hour opens at the
 previous hour's close), so stops see closes only, not intrabar dips. It covers
 the symbols the collector asks about (`data.symbols`). The replay runs once
-per forward-log refresh and is cached.
+per forward-log refresh and is cached. It counts only candles from
+`forward_log.paper_start` on (the dashboard shows "Tracking since"), so the
+first backfilled history trades nothing; move that time to restart the
+portfolio. Earlier calls still count in the forward-log stats.
 
 It follows the OS light or dark setting and works down to phone width. Set
 `JEVTRADE_API` to point the dev server at an API elsewhere.
