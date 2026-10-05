@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CurvePoint } from "./api";
-import { fmtMoney, fmtTime } from "./format";
+import { TZ, fmtMoney, fmtTime } from "./format";
 
 const NARROW = 600;
 
@@ -114,7 +114,7 @@ export function EquityChart({ points, initial }: { points: CurvePoint[]; initial
       {hp && (
         <div className="tooltip" style={{ left: `${tipLeft}%`, transform: `translateX(${tipLeft > 60 ? "-105%" : "5%"})` }}>
           <strong>{fmtMoney(hp.equity)}</strong>
-          <span>{fmtTime(hp.bar_ts)}</span>
+          <span>{fmtTime(hp.bar_ts)} {TZ}</span>
           {hp.cash !== undefined && <span>in coins {Math.max(0, (1 - hp.cash / hp.equity) * 100).toFixed(0)}%</span>}
         </div>
       )}

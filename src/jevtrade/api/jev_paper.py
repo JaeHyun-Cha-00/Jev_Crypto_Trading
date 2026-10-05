@@ -13,8 +13,7 @@ on closes, not on intrabar dips.
 from __future__ import annotations
 
 from collections import defaultdict
-
-import pandas as pd
+from dataclasses import dataclass
 
 from ..decision.base import Decision
 from ..sim import SimState, Simulator, Trade
@@ -32,18 +31,26 @@ def _decision(row: dict) -> Decision | None:
                     abstain=status != "answered", abstain_reason=row.get("abstain_reason"))
 
 
-def _bars(rows: list[dict], tf_ms: int) -> dict[str, dict[int, pd.Series]]:
+@dataclass(frozen=True)
+class Bar:
+    """The fields Simulator reads from a candle; lighter than a pandas row for many symbols."""
+    open: float
+    high: float
+    low: float
+    close: float
+
+
+def _bars(rows: list[dict], tf_ms: int) -> dict[str, dict[int, Bar]]:
     closes: dict[str, dict[int, float]] = defaultdict(dict)
     for r in rows:
         if r.get("close") is not None:
             closes[r["symbol"]][r["candle_ts"]] = float(r["close"])
-    out: dict[str, dict[int, pd.Series]] = {}
+    out: dict[str, dict[int, Bar]] = {}
     for sym, by_ts in closes.items():
         out[sym] = {}
         for ts, close in by_ts.items():
             opened = by_ts.get(ts - tf_ms, close)
-            out[sym][ts] = pd.Series({"open": opened, "high": max(opened, close),
-                                      "low": min(opened, close), "close": close})
+            out[sym][ts] = Bar(opened, max(opened, close), min(opened, close), close)
     return out
 
 
@@ -67,7 +74,7 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
     if not timeline:
         return {**base, "equity": initial, "cash": initial, "total_return": 0.0, "drawdown": 0.0,
                 "last_bar_ts": None, "trades": [], "positions": [], "pending": [], "curve": [], "actions": [],
-                "counts": {}, "per_symbol": {}}
+                "buys": [], "calls": 0, "counts": {}, "per_symbol": {}}
 
     decisions = {(r["symbol"], r["candle_ts"]): r for r in rows}
     sim = Simulator(pcfg, tf_ms, paper.fee_bps, paper.slippage_bps)
@@ -117,6 +124,8 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
                      "ref_close": p.ref_close} for s, p in sorted(st.pending.items())],
         "curve": curve,
         "actions": actions[::-1],   # newest first
+        "buys": [a for a in reversed(actions) if a["action"] == "enter"],   # every buy, newest first
+        "calls": len(actions),
         "counts": dict(counts),
         "per_symbol": per_symbol,
     }

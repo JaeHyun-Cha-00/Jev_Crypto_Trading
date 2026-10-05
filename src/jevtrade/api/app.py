@@ -267,11 +267,16 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None) -> FastAPI:
         """Recent decisions, newest first, each with its outcome (null while pending)."""
         return fwd.rows(symbol, limit)
 
+    paper_cache: dict = {}
+
     @app.get("/api/forward/paper")
     def forward_paper(actions: int = Query(200, ge=0, le=5_000)):
         """Jev's simulated account: the policy and simulator replayed over the forward log's
         answers and closes. No model or exchange calls; fills are simulated."""
-        out = replay(fwd.snapshot().rows, app_cfg, timeframe_ms(app_cfg.data.timeframe))
+        snap = fwd.snapshot()
+        if paper_cache.get("snap") is not snap:   # replay once per forward-log refresh
+            paper_cache.update(snap=snap, out=replay(snap.rows, app_cfg, timeframe_ms(app_cfg.data.timeframe)))
+        out = dict(paper_cache["out"])
         out["actions"] = out["actions"][:actions]
         return out
 

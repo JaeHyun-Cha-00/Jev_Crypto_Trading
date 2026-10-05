@@ -142,8 +142,12 @@ export interface JevPaper {
   positions: Position[];
   pending: { symbol: string; kind: string; reason: string; size_frac: number; ref_close: number }[];
   curve: CurvePoint[];
-  /** newest first */
+  /** newest first, capped by ?actions= */
   actions: JevAction[];
+  /** every buy, newest first */
+  buys: JevAction[];
+  /** hourly calls replayed, all symbols */
+  calls: number;
   counts: Partial<Record<JevAction["action"], number>>;
   per_symbol: Record<string, { trades: number; pnl: number; buys: number }>;
 }
