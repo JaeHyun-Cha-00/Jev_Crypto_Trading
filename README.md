@@ -33,8 +33,8 @@ trade, and when to exit. All risk limits live in code, never in prompts.
 ## Quick start (Docker)
 
 ```bash
-cp .env.example .env              # optional; only needed for the Jev model
-docker compose up -d --build      # paper loop + read-only API + dashboard
+cp .env.example .env              # optional; only needed for a private repo's forward log
+docker compose up -d --build      # read-only API + dashboard
 ```
 
 Then open http://localhost:8080. See
@@ -460,14 +460,17 @@ is missing or lacks access. It only reads: no writes, model calls or exchange ca
 
 ## Running on a fresh Linux VM
 
-`docker compose` runs the three services together. Their data lives in
-Docker volumes, so it survives restarts, rebuilds and reboots.
+`docker compose` runs two services. The dashboard shows Jev's hourly forward
+log, which the collect workflow (GitHub Actions) writes to the `data-log`
+branch, so the VM itself never calls Jev, trades, or stores candles.
 
 | Service | What it does |
 |---|---|
-| `paper` | `python -m jevtrade.paper run`: syncs public candles, processes each closed bar once, writes the daily report |
-| `api` | `python -m jevtrade.api`: read-only API, reachable only from the other containers |
+| `api` | `python -m jevtrade.api`: read-only API that reads the forward log from GitHub, reachable only from `web` |
 | `web` | nginx serving the dashboard and passing `GET /api/*` to `api`; published on `127.0.0.1:8080` |
+
+The local paper loop (`python -m jevtrade.paper run`, section 7) is not part
+of the compose stack; run it yourself if you want it.
 
 A 1 vCPU / 1 GB VM (any provider, Ubuntu 24.04 or Debian 12) is enough. The
 VM needs outbound HTTPS only. Open no inbound ports other than SSH.
@@ -485,25 +488,18 @@ VM needs outbound HTTPS only. Open no inbound ports other than SSH.
    ```bash
    git clone https://github.com/JaeHyun-Cha-00/Jev_Crypto_Trading.git
    cd Jev_Crypto_Trading
-   cp .env.example .env    # leave as is for the mock or baseline model
-   nano config/default.yaml   # optional: decision.model, symbols, paper.initial_equity
+   cp .env.example .env    # set GITHUB_TOKEN only if the repo is private
    ```
-
-   To paper-trade with Jev, set `decision.model: jev`, and put
-   `OPENROUTER_API_KEY=...` and `JEVTRADE_ALLOW_LIVE_MODEL=1` in `.env`.
-   That costs one API call per symbol per hour.
 
 3. **Start everything:**
 
    ```bash
    docker compose up -d --build
    docker compose ps                  # api should become "healthy"
-   docker compose logs -f paper       # first start backfills candles, then processes the latest bar
+   docker compose logs -f api
    ```
 
-   `restart: unless-stopped` brings all three back after a crash or a
-   reboot. The paper loop resumes from its last committed bar and catches
-   up on anything it missed.
+   `restart: unless-stopped` brings both back after a crash or a reboot.
 
 4. **Open the dashboard from your laptop** through an SSH tunnel (the port
    is bound to the VM's localhost and has no login):
@@ -516,18 +512,14 @@ VM needs outbound HTTPS only. Open no inbound ports other than SSH.
 Day to day:
 
 ```bash
-docker compose exec paper python -m jevtrade.paper status   # account in the terminal
-docker compose exec paper python -m jevtrade.report --day 2026-10-04
-docker compose restart paper        # after editing config/default.yaml (mounted read-only)
-git pull && docker compose up -d --build   # update
-docker compose down                 # stop (data volumes are kept; `down -v` deletes them)
+docker compose restart api          # after editing config/default.yaml (mounted read-only)
+git pull && docker compose up -d --build --remove-orphans   # update
+docker compose down                 # stop
 ```
 
-Back up the store with
-`docker compose exec paper python -c "import sqlite3; sqlite3.connect('data/jevtrade.sqlite').backup(sqlite3.connect('data/backup.sqlite'))"`
-followed by `docker compose cp paper:/app/data/backup.sqlite .`.
-`docker compose stop paper` is safe at any time: an interrupted bar is
-rolled back and redone on the next start.
+Upgrading from a version that also ran a `paper` service: `--remove-orphans`
+stops its old container. Its data stays in the `jevdata` and `jevreports`
+volumes until you delete them (`docker volume ls`, then `docker volume rm`).
 
 ## Evaluation validity
 
