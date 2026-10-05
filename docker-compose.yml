@@ -17,8 +17,9 @@ services:
         required: false
     volumes:
       - ./config:/app/config:ro   # edit config/default.yaml, then `docker compose restart api`
-    # Reads the forward log from GitHub over HTTPS (forward_log in config/default.yaml);
-    # the default bridge network allows that outbound. Nothing else leaves the box.
+    # Reads the forward log from GitHub over HTTPS (forward_log in config/default.yaml)
+    # and public Coinbase prices for the Market view (market:); the default bridge
+    # network allows that outbound. Nothing else leaves the box; no keys, no orders.
     command: ["python", "-m", "jevtrade.api", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]

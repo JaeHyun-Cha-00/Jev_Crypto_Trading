@@ -1,12 +1,20 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { get, getForwardRows, getForwardSummary, getJevPaper } from "./api";
 import type { Config, ForwardRow, ForwardSummary, JevPaper } from "./api";
+import { CoinPage } from "./CoinPage";
 import { EquityChart } from "./EquityChart";
 import { ForwardLog } from "./ForwardLog";
 import { TZ, TZ_NAME, ago, fmtMoney, fmtPct, fmtPrice, fmtTime } from "./format";
+import { useLiveMarket, useWatchlist } from "./live";
+import type { FeedStatus } from "./live";
+import { MarketView } from "./Market";
+import type { JevCoin } from "./Market";
+import { Coin, tone } from "./ui";
 
-// Only Jev: its hourly forward calls (collect workflow, data-log branch) and the
-// paper account the policy would have run on them. Simulated fills, never real orders.
+// Two views. Market: every tracked coin live from Coinbase, broker-app style, with
+// a page per coin. Jev: its hourly forward calls (collect workflow, data-log branch)
+// and the paper account the policy would have run on them. Simulated fills, never
+// real orders.
 
 const REFRESH_MS = 60_000;
 const RANGES = [
@@ -39,6 +47,40 @@ function Health({ lastCall }: { lastCall: string | null }) {
   );
 }
 
+/** Live while the Coinbase socket streams; otherwise prices refresh every few seconds. */
+function FeedHealth({ status }: { status: FeedStatus }) {
+  const ok = status === "live";
+  return (
+    <span className={`health ${ok ? "good" : "warning"}`} role="status" title={ok ? "Prices stream from Coinbase" : "Coinbase stream unavailable; prices refresh every 5 seconds"}>
+      <span className="pip" aria-hidden="true" />
+      <span className="feed-label">{ok ? "Live prices" : status === "connecting" ? "Connecting" : "Delayed prices"}</span>
+    </span>
+  );
+}
+
+type Route = { view: "market" } | { view: "coin"; symbol: string } | { view: "jev" };
+
+function parseRoute(hash: string): Route {
+  const coin = /^#\/coin\/([A-Za-z0-9]+)-([A-Za-z0-9]+)$/.exec(hash);
+  if (coin) return { view: "coin", symbol: `${coin[1].toUpperCase()}/${coin[2].toUpperCase()}` };
+  if (hash === "#/jev") return { view: "jev" };
+  return { view: "market" };
+}
+
+/** Hash routes (#/, #/coin/BTC-USD, #/jev) so the back button and links work. */
+function useRoute(): [Route, (hash: string) => void] {
+  const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash));
+  useEffect(() => {
+    const on = () => {
+      setRoute(parseRoute(window.location.hash));
+      window.scrollTo(0, 0);
+    };
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  return [route, (hash: string) => (window.location.hash = hash)];
+}
+
 const ACTION_LABEL: Record<string, string> = { enter: "buy", exit: "sell", hold: "hold", skip: "pass" };
 
 function Tile({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: "up" | "down" }) {
@@ -48,31 +90,6 @@ function Tile({ label, value, sub, tone }: { label: string; value: string; sub?:
       <div className={`tile-value ${tone ?? ""}`}>{value}</div>
       {sub && <div className="tile-sub">{sub}</div>}
     </div>
-  );
-}
-
-function tone(v: number | null | undefined): "up" | "down" | undefined {
-  return v === null || v === undefined || v === 0 ? undefined : v > 0 ? "up" : "down";
-}
-
-const COIN_COLORS: Record<string, string> = {
-  BTC: "#f7931a", ETH: "#627eea", SOL: "#9945ff", XRP: "#23292f", DOGE: "#c2a633", ADA: "#0033ad", LTC: "#345d9d",
-};
-
-/** A round badge for the base asset, the way coin apps mark a market. */
-function Coin({ symbol, showQuote = true }: { symbol: string; showQuote?: boolean }) {
-  const [base, quote] = symbol.split("/");
-  const hue = [...base].reduce((h, c) => h + c.charCodeAt(0) * 37, 0) % 360;
-  return (
-    <span className="coin-cell">
-      <span className="coin" style={{ background: COIN_COLORS[base] ?? `hsl(${hue} 55% 48%)` }} aria-hidden="true">
-        {base.slice(0, 1)}
-      </span>
-      <span>
-        {base}
-        {showQuote && quote && <span className="coin-quote">/{quote}</span>}
-      </span>
-    </span>
   );
 }
 
@@ -205,38 +222,11 @@ function Bought({ paper, symbol }: { paper: JevPaper | null; symbol: string }) {
   );
 }
 
-export default function App() {
-  const [data, setData] = useState<Data>(empty);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+/** Jev's paper portfolio and forward log, as before. */
+function JevView({ data }: { data: Data }) {
   const [range, setRange] = useState<RangeId>("all");
   const [symbol, setSymbol] = useState<string>("");
   const [activity, setActivity] = useState<"buys" | "trades" | "calls">("buys");
-  const [theme, toggleTheme] = useTheme();
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [config, paper, summary, rows] = await Promise.all([
-        get<Config>("/config"),
-        getJevPaper(500),
-        getForwardSummary(),
-        getForwardRows({ limit: 300 }),
-      ]);
-      setData({ config, paper, summary, rows });
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-    const id = setInterval(load, REFRESH_MS);
-    return () => clearInterval(id);
-  }, [load]);
 
   const { config, paper, summary } = data;
   const curve = paper?.curve ?? [];
@@ -263,17 +253,291 @@ export default function App() {
 
   return (
     <>
+      <nav className="markets" aria-label="Coin">
+        <button className={`chip all ${symbol === "" ? "on" : ""}`} onClick={() => setSymbol("")} aria-pressed={symbol === ""}>
+          All coins
+        </button>
+        {traded.map((s) => (
+          <button key={s} className={`chip ${symbol === s ? "on" : ""}`} onClick={() => setSymbol(s)} aria-pressed={symbol === s}>
+            <Coin symbol={s} />
+          </button>
+        ))}
+        <select
+          className="chip all coin-pick"
+          aria-label="Any coin"
+          value={traded.includes(symbol) ? "" : symbol}
+          onChange={(e) => setSymbol(e.target.value)}
+        >
+          <option value="">{traded.length ? `Other coins (${symbols.length - traded.length})` : `Pick a coin (${symbols.length})`}</option>
+          {symbols.filter((s) => !traded.includes(s)).map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+      </nav>
+
+      <Bought paper={paper} symbol={symbol} />
+
+      <section className="card hero">
+        <div className="hero-top">
+          <div>
+            <div className="hero-label">
+              Jev paper portfolio
+              {paper?.tracking_since != null && (
+                <span className="since"> · Tracking since {fmtTime(paper.tracking_since)} {TZ}</span>
+              )}
+            </div>
+            <div className="balance">
+              {fmtMoney(paper?.equity)}
+              <span className="ccy">USD</span>
+            </div>
+            <div className="deltas">
+              <span className={`pill ${tone(paper?.total_return) ?? ""}`}>{fmtPct(paper?.total_return)}</span>
+              <span>since tracking started</span>
+              {rangeReturn !== null && range !== "all" && (
+                <>
+                  <span className={`pill ${tone(rangeReturn) ?? ""}`}>{fmtPct(rangeReturn)}</span>
+                  <span>{rangeLabel}</span>
+                </>
+              )}
+            </div>
+          </div>
+          <div className="seg" role="group" aria-label="Equity range">
+            {RANGES.map((r) => (
+              <button key={r.id} className={r.id === range ? "on" : ""} onClick={() => setRange(r.id)}>
+                {r.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <EquityChart points={equity} initial={paper?.initial_equity ?? 10_000} />
+        <p className="caveat small" role="note">
+          <span aria-hidden="true">▲</span> Likely better than real trading. Prices are Coinbase hourly candles with an
+          estimated Robinhood spread, not real Robinhood quotes. Hours logged before candle highs and lows were
+          recorded only check the{pol ? ` ${fmtPct(pol.stop_loss_pct, false)}` : ""} stop-loss on closes.
+        </p>
+        <p className="muted small">
+          Jev's own hourly answers run through the trading rules · {symbols.length > 4 ? `${symbols.length} coins` : symbols.join(", ") || "no coins yet"} ·
+          simulated fills, never real orders
+        </p>
+      </section>
+
+      <section className="tiles">
+        <Tile label="Cash" value={fmtMoney(paper?.cash)} sub={`from ${fmtMoney(paper?.initial_equity, 0)} start`} />
+        <Tile label="Buys" value={String(paper?.counts.enter ?? 0)} sub={`out of ${paper?.calls ?? 0} hourly calls`} />
+        <Tile label="Drawdown" value={fmtPct(paper?.drawdown)} tone={paper && paper.drawdown < 0 ? "down" : undefined} />
+        <Tile
+          label="Closed trades"
+          value={String(closed.length)}
+          sub={`win rate ${closed.length ? fmtPct(wins / closed.length, false) : "n/a"}`}
+        />
+        <Tile label="Realized PnL" value={fmtMoney(realized)} tone={tone(realized)} />
+      </section>
+
+      <div className="two split">
+        <section className="card">
+          <h2>Jev by coin</h2>
+          {coinRows.length === 0 ? (
+            <p className="muted small">No buys{symbol ? ` on ${symbol}` : ""} yet across {symbol ? 1 : symbols.length} coin{symbol || symbols.length === 1 ? "" : "s"} watched.</p>
+          ) : <div className="scroll"><table>
+            <thead>
+              <tr><th>Coin</th><th className="num">Buys</th><th className="num">Closed</th><th className="num">PnL</th></tr>
+            </thead>
+            <tbody>
+              {coinRows.map(([s, v]) => (
+                <tr key={s}>
+                  <td><Coin symbol={s} /></td>
+                  <td className="num">{v.buys}</td>
+                  <td className="num">{v.trades}</td>
+                  <td className={`num ${tone(v.pnl) ?? ""}`}>{fmtMoney(v.pnl)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>}
+          {coinRows.length > 0 && !symbol && symbols.length > coinRows.length && (
+            <p className="muted small">{symbols.length - coinRows.length} other coin{symbols.length - coinRows.length === 1 ? "" : "s"} watched, no buys.</p>
+          )}
+        </section>
+
+        <section className="card">
+          <h2>Trading rules</h2>
+          {pol && (
+            <dl className="kv">
+              <dt>Buy when</dt><dd>p(up) ≥ {pol.entry_threshold} and p(up) − p(down) ≥ {pol.min_edge}</dd>
+              <dt>Sell when</dt><dd>p(down) ≥ {pol.exit_threshold}, the stop, or {pol.max_holding_bars ?? "no"} hours held</dd>
+              <dt>Stop-loss</dt><dd>{fmtPct(pol.stop_loss_pct, false)}</dd>
+              {config && (
+                <>
+                  <dt>Position at stop</dt><dd>{fmtPct(Number(config.sizing.position_frac_at_stop), false)} of equity</dd>
+                  {paper.max_volume_frac != null && (
+                    <><dt>Thin coins</dt><dd>a buy is at most {fmtPct(paper.max_volume_frac, false)} of the coin's hourly dollar volume</dd></>
+                  )}
+                  <dt>Max position / gross</dt><dd>{fmtPct(Number(config.sizing.max_position_frac), false)} / {fmtPct(Number(config.sizing.max_gross_exposure), false)}</dd>
+                  <dt>Direction question</dt><dd>±{config.flat_band_pct}% over {config.horizon_bars} hours</dd>
+                </>
+              )}
+              <dt>Costs</dt><dd>
+                {paper.fee_bps ? `${paper.fee_bps} bps fee + ` : "No fee, "}
+                {fmtPct(paper.spread_bps.min / 10_000, false)}–{fmtPct(paper.spread_bps.max / 10_000, false)} spread per side
+                {paper.slippage_bps ? ` + ${paper.slippage_bps} bps slippage` : ""} (Robinhood-like; wider for thin coins)
+              </dd>
+            </dl>
+          )}
+          <p className="muted small pending">
+            Orders fill when the hourly run actually asked Jev (often late), at a price estimated within that hour.
+            Stops trigger on the hour's low.
+          </p>
+        </section>
+      </div>
+
+      <section className="card">
+        <div className="card-head">
+          <h2>Jev's activity</h2>
+          <div className="seg" role="tablist" aria-label="Activity">
+            {(["buys", "trades", "calls"] as const).map((k) => (
+              <button key={k} role="tab" aria-selected={activity === k} className={activity === k ? "on" : ""} onClick={() => setActivity(k)}>
+                {k === "buys" ? "Buys" : k === "trades" ? "Trades" : "Every call"}
+              </button>
+            ))}
+          </div>
+        </div>
+        {activity === "trades" ? (
+          trades.length === 0 ? (
+            <p className="muted">No closed trades yet.</p>
+          ) : (
+            <div className="scroll">
+              <table>
+                <thead>
+                  <tr><th>Coin</th><th>Bought ({TZ})</th><th>Sold ({TZ})</th><th className="num">Hours</th><th className="num">Return</th><th className="num">PnL</th><th>Why sold</th></tr>
+                </thead>
+                <tbody>
+                  {trades.slice(0, 100).map((t) => (
+                    <tr key={`${t.symbol}-${t.entry_ts}`}>
+                      <td><Coin symbol={t.symbol} /></td>
+                      <td>{fmtTime(t.entry_ts)} <span className="at">@ {fmtPrice(t.entry_price)}</span></td>
+                      <td>{fmtTime(t.exit_ts)} <span className="at">@ {fmtPrice(t.exit_price)}</span></td>
+                      <td className="num">{t.bars_held}</td>
+                      <td className={`num ${tone(t.ret) ?? ""}`}>{fmtPct(t.ret)}</td>
+                      <td className={`num ${tone(t.pnl) ?? ""}`}>{fmtMoney(t.pnl)}</td>
+                      <td>{t.exit_reason.split(":")[0].replace("_", " ")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        ) : (activity === "buys" ? buys : actions).length === 0 ? (
+          <p className="muted">
+            {activity === "buys"
+              ? `No buys yet. Jev's p(up) hasn't reached ${pol?.entry_threshold ?? 0.55} with enough edge${symbol ? ` on ${symbol}` : ""}.`
+              : "No calls yet."}
+          </p>
+        ) : (
+          <div className="scroll">
+            <table>
+              <thead>
+                <tr><th>Hour ({TZ})</th><th>Coin</th><th className="num">Price</th><th className="num">p(up)</th><th className="num">p(down)</th><th className="num">Odds</th><th>Action</th><th>Reason</th></tr>
+              </thead>
+              <tbody>
+                {(activity === "buys" ? buys : actions).slice(0, 200).map((a) => {
+                  const answered = a.status === "answered";
+                  const p = { up: a.p_up, down: a.p_down, flat: Math.max(0, 1 - a.p_up - a.p_down) };
+                  return (
+                    <tr key={`${a.symbol}-${a.bar_ts}`}>
+                      <td>{fmtTime(a.bar_ts)}</td>
+                      <td><Coin symbol={a.symbol} /></td>
+                      <td className="num">{fmtPrice(a.close)}</td>
+                      <td className="num up">{answered ? a.p_up.toFixed(2) : "–"}</td>
+                      <td className="num down">{answered ? a.p_down.toFixed(2) : "–"}</td>
+                      <td className="num">{answered ? <Odds p={p} /> : "–"}</td>
+                      <td><span className={`tag ${a.action}`}>{ACTION_LABEL[a.action]}</span></td>
+                      <td className="reason">{a.reason}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <ForwardLog summary={summary} rows={data.rows} symbol={symbol} error={null} />
+
+      <footer className="muted small">
+        Read-only view of Jev's forward log. Refreshes every minute. Last tracked hour{" "}
+        {paper?.last_bar_ts ? `${fmtTime(paper.last_bar_ts)} ${TZ}` : "none yet"}. All times are your local time ({TZ_NAME}).
+      </footer>
+    </>
+  );
+}
+
+export default function App() {
+  const [data, setData] = useState<Data>(empty);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [theme, toggleTheme] = useTheme();
+  const [route, go] = useRoute();
+  const market = useLiveMarket();
+  const [watch, toggleWatch] = useWatchlist();
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [config, paper, summary, rows] = await Promise.all([
+        get<Config>("/config"),
+        getJevPaper(500),
+        getForwardSummary(),
+        getForwardRows({ limit: 300 }),
+      ]);
+      setData({ config, paper, summary, rows });
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, REFRESH_MS);
+    return () => clearInterval(id);
+  }, [load]);
+
+  // What Jev holds, is buying, and last said, per coin, for the market list.
+  const jev = useMemo(() => {
+    const out: Record<string, JevCoin> = {};
+    const paper = data.paper;
+    if (!paper) return out;
+    for (const a of paper.actions) if (!out[a.symbol]) out[a.symbol] = { holding: false, buying: false, last: a };
+    for (const p of paper.positions) out[p.symbol] = { ...out[p.symbol], buying: false, holding: true };
+    for (const p of paper.pending) if (p.kind === "enter") out[p.symbol] = { holding: out[p.symbol]?.holding ?? false, last: out[p.symbol]?.last, buying: true };
+    return out;
+  }, [data.paper]);
+
+  const tab = route.view === "jev" ? "jev" : "market";
+  return (
+    <>
       <header className="topbar">
         <div className="topbar-inner">
-          <div className="brand">
+          <a className="brand" href="#/" aria-label="Jev market">
             <span className="logo" aria-hidden="true">J</span>
             <h1>Jev</h1>
             <span className="badge" title="Simulated fills, never real orders">PAPER</span>
-          </div>
+          </a>
+          <nav className="tabs" aria-label="View">
+            <a href="#/" className={tab === "market" ? "on" : ""} aria-current={tab === "market" ? "page" : undefined}>Market</a>
+            <a href="#/jev" className={tab === "jev" ? "on" : ""} aria-current={tab === "jev" ? "page" : undefined}>Jev portfolio</a>
+          </nav>
           <span className="spacer" />
-          <span className="health tz" title={`Times are shown in your local time zone, ${TZ_NAME}`}>{TZ}</span>
-          <Health lastCall={summary?.last_called_at ?? null} />
-          <button className="icon-btn" onClick={load} aria-label="Refresh" title="Refresh">
+          {tab === "jev" ? (
+            <>
+              <span className="health tz" title={`Times are shown in your local time zone, ${TZ_NAME}`}>{TZ}</span>
+              <Health lastCall={data.summary?.last_called_at ?? null} />
+            </>
+          ) : (
+            <FeedHealth status={market.status} />
+          )}
+          <button className="icon-btn refresh" onClick={load} aria-label="Refresh" title="Refresh">
             {Icon.refresh}
           </button>
           <button
@@ -293,220 +557,23 @@ export default function App() {
             <span aria-hidden="true">▲</span> Can't reach the API: {error}. Retrying every minute.
           </div>
         )}
-
-        <nav className="markets" aria-label="Coin">
-          <button className={`chip all ${symbol === "" ? "on" : ""}`} onClick={() => setSymbol("")} aria-pressed={symbol === ""}>
-            All coins
-          </button>
-          {traded.map((s) => (
-            <button key={s} className={`chip ${symbol === s ? "on" : ""}`} onClick={() => setSymbol(s)} aria-pressed={symbol === s}>
-              <Coin symbol={s} />
-            </button>
-          ))}
-          <select
-            className="chip all coin-pick"
-            aria-label="Any coin"
-            value={traded.includes(symbol) ? "" : symbol}
-            onChange={(e) => setSymbol(e.target.value)}
-          >
-            <option value="">{traded.length ? `Other coins (${symbols.length - traded.length})` : `Pick a coin (${symbols.length})`}</option>
-            {symbols.filter((s) => !traded.includes(s)).map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-        </nav>
-
-        <Bought paper={paper} symbol={symbol} />
-
-        <section className="card hero">
-          <div className="hero-top">
-            <div>
-              <div className="hero-label">
-                Jev paper portfolio
-                {paper?.tracking_since != null && (
-                  <span className="since"> · Tracking since {fmtTime(paper.tracking_since)} {TZ}</span>
-                )}
-              </div>
-              <div className="balance">
-                {fmtMoney(paper?.equity)}
-                <span className="ccy">USD</span>
-              </div>
-              <div className="deltas">
-                <span className={`pill ${tone(paper?.total_return) ?? ""}`}>{fmtPct(paper?.total_return)}</span>
-                <span>since tracking started</span>
-                {rangeReturn !== null && range !== "all" && (
-                  <>
-                    <span className={`pill ${tone(rangeReturn) ?? ""}`}>{fmtPct(rangeReturn)}</span>
-                    <span>{rangeLabel}</span>
-                  </>
-                )}
-              </div>
-            </div>
-            <div className="seg" role="group" aria-label="Equity range">
-              {RANGES.map((r) => (
-                <button key={r.id} className={r.id === range ? "on" : ""} onClick={() => setRange(r.id)}>
-                  {r.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <EquityChart points={equity} initial={paper?.initial_equity ?? 10_000} />
-          <p className="caveat small" role="note">
-            <span aria-hidden="true">▲</span> Likely better than real trading. Prices are Coinbase hourly candles with an
-            estimated Robinhood spread, not real Robinhood quotes. Hours logged before candle highs and lows were
-            recorded only check the{pol ? ` ${fmtPct(pol.stop_loss_pct, false)}` : ""} stop-loss on closes.
-          </p>
-          <p className="muted small">
-            Jev's own hourly answers run through the trading rules · {symbols.length > 4 ? `${symbols.length} coins` : symbols.join(", ") || "no coins yet"} ·
-            simulated fills, never real orders
-          </p>
-        </section>
-
-        <section className="tiles">
-          <Tile label="Cash" value={fmtMoney(paper?.cash)} sub={`from ${fmtMoney(paper?.initial_equity, 0)} start`} />
-          <Tile label="Buys" value={String(paper?.counts.enter ?? 0)} sub={`out of ${paper?.calls ?? 0} hourly calls`} />
-          <Tile label="Drawdown" value={fmtPct(paper?.drawdown)} tone={paper && paper.drawdown < 0 ? "down" : undefined} />
-          <Tile
-            label="Closed trades"
-            value={String(closed.length)}
-            sub={`win rate ${closed.length ? fmtPct(wins / closed.length, false) : "n/a"}`}
+        {route.view === "jev" ? (
+          <JevView data={data} />
+        ) : route.view === "coin" ? (
+          <CoinPage
+            key={route.symbol}
+            symbol={route.symbol}
+            coin={market.bySymbol[route.symbol]}
+            status={market.status}
+            paper={data.paper}
+            starred={watch.has(route.symbol)}
+            toggleStar={() => toggleWatch(route.symbol)}
+            theme={theme}
+            back={() => go("#/")}
           />
-          <Tile label="Realized PnL" value={fmtMoney(realized)} tone={tone(realized)} />
-        </section>
-
-        <div className="two split">
-          <section className="card">
-            <h2>Jev by coin</h2>
-            {coinRows.length === 0 ? (
-              <p className="muted small">No buys{symbol ? ` on ${symbol}` : ""} yet across {symbol ? 1 : symbols.length} coin{symbol || symbols.length === 1 ? "" : "s"} watched.</p>
-            ) : <div className="scroll"><table>
-              <thead>
-                <tr><th>Coin</th><th className="num">Buys</th><th className="num">Closed</th><th className="num">PnL</th></tr>
-              </thead>
-              <tbody>
-                {coinRows.map(([s, v]) => (
-                  <tr key={s}>
-                    <td><Coin symbol={s} /></td>
-                    <td className="num">{v.buys}</td>
-                    <td className="num">{v.trades}</td>
-                    <td className={`num ${tone(v.pnl) ?? ""}`}>{fmtMoney(v.pnl)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table></div>}
-            {coinRows.length > 0 && !symbol && symbols.length > coinRows.length && (
-              <p className="muted small">{symbols.length - coinRows.length} other coin{symbols.length - coinRows.length === 1 ? "" : "s"} watched, no buys.</p>
-            )}
-          </section>
-
-          <section className="card">
-            <h2>Trading rules</h2>
-            {pol && (
-              <dl className="kv">
-                <dt>Buy when</dt><dd>p(up) ≥ {pol.entry_threshold} and p(up) − p(down) ≥ {pol.min_edge}</dd>
-                <dt>Sell when</dt><dd>p(down) ≥ {pol.exit_threshold}, the stop, or {pol.max_holding_bars ?? "no"} hours held</dd>
-                <dt>Stop-loss</dt><dd>{fmtPct(pol.stop_loss_pct, false)}</dd>
-                {config && (
-                  <>
-                    <dt>Position at stop</dt><dd>{fmtPct(Number(config.sizing.position_frac_at_stop), false)} of equity</dd>
-                    {paper.max_volume_frac != null && (
-                      <><dt>Thin coins</dt><dd>a buy is at most {fmtPct(paper.max_volume_frac, false)} of the coin's hourly dollar volume</dd></>
-                    )}
-                    <dt>Max position / gross</dt><dd>{fmtPct(Number(config.sizing.max_position_frac), false)} / {fmtPct(Number(config.sizing.max_gross_exposure), false)}</dd>
-                    <dt>Direction question</dt><dd>±{config.flat_band_pct}% over {config.horizon_bars} hours</dd>
-                  </>
-                )}
-                <dt>Costs</dt><dd>
-                  {paper.fee_bps ? `${paper.fee_bps} bps fee + ` : "No fee, "}
-                  {fmtPct(paper.spread_bps.min / 10_000, false)}–{fmtPct(paper.spread_bps.max / 10_000, false)} spread per side
-                  {paper.slippage_bps ? ` + ${paper.slippage_bps} bps slippage` : ""} (Robinhood-like; wider for thin coins)
-                </dd>
-              </dl>
-            )}
-            <p className="muted small pending">
-              Orders fill when the hourly run actually asked Jev (often late), at a price estimated within that hour.
-              Stops trigger on the hour's low.
-            </p>
-          </section>
-        </div>
-
-        <section className="card">
-          <div className="card-head">
-            <h2>Jev's activity</h2>
-            <div className="seg" role="tablist" aria-label="Activity">
-              {(["buys", "trades", "calls"] as const).map((k) => (
-                <button key={k} role="tab" aria-selected={activity === k} className={activity === k ? "on" : ""} onClick={() => setActivity(k)}>
-                  {k === "buys" ? "Buys" : k === "trades" ? "Trades" : "Every call"}
-                </button>
-              ))}
-            </div>
-          </div>
-          {activity === "trades" ? (
-            trades.length === 0 ? (
-              <p className="muted">No closed trades yet.</p>
-            ) : (
-              <div className="scroll">
-                <table>
-                  <thead>
-                    <tr><th>Coin</th><th>Bought ({TZ})</th><th>Sold ({TZ})</th><th className="num">Hours</th><th className="num">Return</th><th className="num">PnL</th><th>Why sold</th></tr>
-                  </thead>
-                  <tbody>
-                    {trades.slice(0, 100).map((t) => (
-                      <tr key={`${t.symbol}-${t.entry_ts}`}>
-                        <td><Coin symbol={t.symbol} /></td>
-                        <td>{fmtTime(t.entry_ts)} <span className="at">@ {fmtPrice(t.entry_price)}</span></td>
-                        <td>{fmtTime(t.exit_ts)} <span className="at">@ {fmtPrice(t.exit_price)}</span></td>
-                        <td className="num">{t.bars_held}</td>
-                        <td className={`num ${tone(t.ret) ?? ""}`}>{fmtPct(t.ret)}</td>
-                        <td className={`num ${tone(t.pnl) ?? ""}`}>{fmtMoney(t.pnl)}</td>
-                        <td>{t.exit_reason.split(":")[0].replace("_", " ")}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )
-          ) : (activity === "buys" ? buys : actions).length === 0 ? (
-            <p className="muted">
-              {activity === "buys"
-                ? `No buys yet. Jev's p(up) hasn't reached ${pol?.entry_threshold ?? 0.55} with enough edge${symbol ? ` on ${symbol}` : ""}.`
-                : "No calls yet."}
-            </p>
-          ) : (
-            <div className="scroll">
-              <table>
-                <thead>
-                  <tr><th>Hour ({TZ})</th><th>Coin</th><th className="num">Price</th><th className="num">p(up)</th><th className="num">p(down)</th><th className="num">Odds</th><th>Action</th><th>Reason</th></tr>
-                </thead>
-                <tbody>
-                  {(activity === "buys" ? buys : actions).slice(0, 200).map((a) => {
-                    const answered = a.status === "answered";
-                    const p = { up: a.p_up, down: a.p_down, flat: Math.max(0, 1 - a.p_up - a.p_down) };
-                    return (
-                      <tr key={`${a.symbol}-${a.bar_ts}`}>
-                        <td>{fmtTime(a.bar_ts)}</td>
-                        <td><Coin symbol={a.symbol} /></td>
-                        <td className="num">{fmtPrice(a.close)}</td>
-                        <td className="num up">{answered ? a.p_up.toFixed(2) : "–"}</td>
-                        <td className="num down">{answered ? a.p_down.toFixed(2) : "–"}</td>
-                        <td className="num">{answered ? <Odds p={p} /> : "–"}</td>
-                        <td><span className={`tag ${a.action}`}>{ACTION_LABEL[a.action]}</span></td>
-                        <td className="reason">{a.reason}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-
-        <ForwardLog summary={summary} rows={data.rows} symbol={symbol} error={null} />
-
-        <footer className="muted small">
-          Read-only view of Jev's forward log. Refreshes every minute. Last tracked hour{" "}
-          {paper?.last_bar_ts ? `${fmtTime(paper.last_bar_ts)} ${TZ}` : "none yet"}. All times are your local time ({TZ_NAME}).
-        </footer>
+        ) : (
+          <MarketView market={market} jev={jev} watch={watch} toggleWatch={toggleWatch} open={(s) => go(`#/coin/${s.replace("/", "-")}`)} />
+        )}
       </main>
     </>
   );
