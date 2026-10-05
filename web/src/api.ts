@@ -154,6 +154,10 @@ export interface JevPaper {
   slippage_bps: number;
   /** per-side spread from the mid, bps: deep coins pay min, the thinnest max */
   spread_bps: { min: number; max: number };
+  /** "robinhood": spreads come from Robinhood quotes the collect run logged; "estimate": the configured model */
+  spread_source: "robinhood" | "estimate";
+  /** coins with at least one logged Robinhood quote */
+  quoted_symbols: number;
   /** a buy is at most this share of the coin's median hourly dollar volume; null = no cap */
   max_volume_frac: number | null;
   policy: {

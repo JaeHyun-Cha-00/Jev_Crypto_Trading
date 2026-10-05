@@ -187,6 +187,25 @@ def test_robinhood_spread_is_paid_on_both_sides_and_wider_for_thin_coins():
     assert r["spread_bps"] == {"min": 95, "max": 115}
 
 
+def test_logged_robinhood_quotes_replace_the_spread_estimate():
+    cfg = AppConfig()   # estimate would be 95-115bps
+    rows = [_ohlc(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), 100.0, 100.0, 100.0, 1e6)]
+    rows += [_ohlc(row("BTC/USD", i, 100.0), 100.0, 100.0, 100.0, 1e6) for i in range(1, 6)]
+    rows[0].update(rh_bid=99.5, rh_ask=100.5)   # 50bps per side, carried forward to later fills
+    rows[3].update(rh_bid=99.0, rh_ask=101.0)   # 100bps from hour 3 on
+    r = run(rows, cfg)
+    t = r["trades"][0]
+    assert t["entry_price"] == pytest.approx(100.5)
+    assert t["exit_price"] == pytest.approx(99.0)
+    assert r["spread_source"] == "robinhood" and r["quoted_symbols"] == 1
+    assert r["spread_bps"] == {"min": pytest.approx(100), "max": pytest.approx(100)}
+
+
+def test_without_quotes_the_estimate_is_reported():
+    r = run([row("BTC/USD", 0, 100.0)], AppConfig())
+    assert r["spread_source"] == "estimate" and r["quoted_symbols"] == 0
+
+
 def test_spread_scales_on_log_volume():
     c = JevPaperConfig()
     assert c.spread_for(5e6) == c.spread_for(5e9) == 95
