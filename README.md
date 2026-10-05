@@ -392,7 +392,8 @@ loop and backtests are no longer shown. It shows:
 The replay prices each hour from the logged closes (an hour opens at the
 previous hour's close), so stops see closes only, not intrabar dips. It covers
 the symbols the collector asks about (`data.symbols`). The replay runs once
-per forward-log refresh and is cached.
+per forward-log refresh and is cached. It counts only candles from
+`forward_log.start` on (the dashboard shows "Tracking since").
 
 It follows the OS light or dark setting and works down to phone width. Set
 `JEVTRADE_API` to point the dev server at an API elsewhere.
@@ -408,6 +409,11 @@ demand via **Run workflow**). Each run:
   skipped or delayed run is backfilled and no candle is asked twice;
 - logs the realized outcome of each decision once its horizon has closed;
 - commits the JSONL files to the orphan `data-log` branch, never to main.
+
+`forward_log.start` is a fresh-start cutoff: the collector never asks about a
+candle before it (the backfill stops there), and the API ignores earlier lines.
+To restart, move it to a future hour and clear `decisions/` and `outcomes/` on
+`data-log` (archive the old head first).
 
 No trading and no simulated positions. Calls that got no response at all are
 logged with `status: "error"` and asked again on the next run. The key comes

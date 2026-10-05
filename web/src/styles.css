@@ -232,3 +232,4 @@ footer { margin-top: 24px; text-align: center; }
 }
 .card.bought { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .coin-pick { appearance: auto; color: var(--ink-2); font: inherit; padding: 6px 10px; max-width: 220px; }
+.hero-label .since { color: var(--ink); font-weight: 600; }

@@ -265,6 +265,9 @@ class Collector:
         now_ms = int(time.time() * 1000) if now_ms is None else now_ms
         latest = last_closed_open_ms(now_ms, self.tf_ms)
         first = latest - (self.max_backfill - 1) * self.tf_ms
+        start = self.cfg.forward_log.start_ms()
+        if start is not None:   # fresh start: never ask about an earlier candle
+            first = max(first, start)
         horizon = self.cfg.decision.horizon_bars
         self.out.mkdir(parents=True, exist_ok=True)
         readme = self.out / "README.md"

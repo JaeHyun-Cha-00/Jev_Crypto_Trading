@@ -302,6 +302,9 @@ class ForwardLog:
         for f in FOLDERS:
             n, data[f] = read(f)
             files += n
+        start = self.cfg.start_ms()
+        if start is not None:   # nothing before the fresh start is shown
+            data = {f: [r for r in recs if r["candle_ts"] >= start] for f, recs in data.items()}
         cost: dict[str, float] = defaultdict(float)
         for d in data["decisions"]:   # every call, retried errors included
             cost[d["symbol"]] += float(d.get("cost_usd") or 0.0)

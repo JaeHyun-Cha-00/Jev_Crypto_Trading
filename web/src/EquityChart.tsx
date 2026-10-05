@@ -56,7 +56,7 @@ export function EquityChart({ points, initial }: { points: CurvePoint[]; initial
     // PAD, H and narrow all follow W.
   }, [points, initial, W]);
 
-  if (!geo) return <p className="muted">No equity yet. Jev's account gets one point per logged hour.</p>;
+  if (!geo) return <p className="muted">No hours tracked yet. The account starts at its full balance and adds a point each hour Jev is called from the tracking start on.</p>;
 
   const onMove = (e: React.PointerEvent<SVGSVGElement>) => {
     const rect = svgRef.current!.getBoundingClientRect();
