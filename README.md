@@ -24,7 +24,7 @@ trade, and when to exit. All risk limits live in code, never in prompts.
 | `src/jevtrade/decision/` | `DecisionModel`: Mock ✅, Baseline ✅, Jev (pending docs) | ✅ stage 3 (partial) |
 | `src/jevtrade/policy/` | Probabilities → actions, risk limits | ✅ stage 3 |
 | `src/jevtrade/backtest/` | Event-driven walk-forward backtester | ✅ stage 4 |
-| `paper/` | Live paper loop | planned |
+| `src/jevtrade/paper/` | Live paper loop, restart-safe, simulated fills only | ✅ stage 7 |
 | `report/` | Metrics and daily Markdown summary | planned |
 | `api/` | Read-only FastAPI | planned |
 | `web/` | React dashboard | planned |
@@ -224,6 +224,69 @@ ride its own signal cut its trade count from 1,628 to 387 and its loss
 roughly in half; the mock model still pays round-trip costs (about 24 bps)
 on a 4-bar hold. These runs check the plumbing and set the bar Jev has to
 clear.
+
+### 7. Paper loop
+
+```bash
+python -m jevtrade.paper run          # loop forever: process each closed candle, sleep to the next
+python -m jevtrade.paper run --once   # process whatever is ready, then exit
+python -m jevtrade.paper status       # equity, open positions, pending orders, last bar
+```
+
+The paper loop is meant to run unattended on your own machine or a small VM
+(1 vCPU and 1 GB RAM is plenty), not in a hosted notebook or chat session.
+It needs outbound HTTPS to the exchange's public API, plus OpenRouter if the
+model is Jev.
+
+- **Paper only.** Fills are simulated from candles by the same `Simulator`
+  the backtest uses (`src/jevtrade/sim.py`), so a bar fills, sizes and exits
+  exactly as it would in a backtest; a test replays history hour by hour and
+  checks that paper trades and equity match the backtest. The exchange
+  client is unauthenticated and the code has no order calls
+  (`tests/test_safety.py`, `tests/test_paper.py`).
+- **One pass per closed candle.** Each step syncs public candles, then
+  processes every closed bar after the last processed one. A bar's fills,
+  decisions, trades, equity row and account state commit in one SQLite
+  transaction, and `paper_bars` records it. Running a step again for the
+  same candle does nothing.
+- **Restart-safe.** Stop it any time (Ctrl-C, `SIGTERM`, a reboot, a crash).
+  A bar interrupted mid-way is rolled back and redone on the next start;
+  bars missed while it was down are caught up in order. Past
+  `max_catchup_bars` (48), older missed bars run risk-only: stops and
+  holding limits still apply, but the model isn't called and nothing new
+  opens. A file lock (`<sqlite_path>.paper.lock`) stops a second loop from
+  writing the same store.
+- A fresh run starts at the latest closed bar with `paper.initial_equity`;
+  it doesn't replay history. Changing the decision model of an existing run
+  is refused; set `paper.run_id` to start a new paper account.
+- If one symbol's candle is late, the loop waits for it (retrying every
+  `retry_s`). After `stall_grace_bars` it processes the bar without that
+  symbol.
+- `decision.model: jev` needs `--allow-live-model` or
+  `JEVTRADE_ALLOW_LIVE_MODEL=1`, because it calls the paid API once per
+  symbol per bar.
+- Tables: `paper_state` (account JSON, model, heartbeat), `paper_bars`
+  (equity per bar), `paper_trades`, and `decisions` under `run_id = paper`.
+
+To keep it running on a Linux box without Docker, a systemd unit works:
+
+```ini
+# /etc/systemd/system/jevtrade-paper.service
+[Unit]
+Description=jevtrade paper loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/jev_crypto_trading
+ExecStart=/opt/jev_crypto_trading/.venv/bin/python -m jevtrade.paper run
+Restart=always
+RestartSec=30
+User=jevtrade
+
+[Install]
+WantedBy=multi-user.target
+```
 
 ## Evaluation validity
 

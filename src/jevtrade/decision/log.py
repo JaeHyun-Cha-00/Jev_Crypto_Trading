@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -49,14 +50,21 @@ CREATE TABLE IF NOT EXISTS decision_answers (
 
 
 class DecisionLog:
-    def __init__(self, conn: sqlite3.Connection):
+    """`commit=False` leaves writes in the caller's open transaction, so the
+    paper loop can log a bar's decisions atomically with its fills."""
+
+    def __init__(self, conn: sqlite3.Connection, commit: bool = True):
         self.conn = conn
+        self.commit = commit
         self.conn.executescript(_SCHEMA)
+
+    def _tx(self):
+        return self.conn if self.commit else contextlib.nullcontext()
 
     def record(
         self, run_id: str, symbol: str, bar_ts: int, d: Decision, input_text: str | None
     ) -> int:
-        with self.conn:
+        with self._tx():
             cur = self.conn.execute(
                 "INSERT INTO decisions (run_id, symbol, bar_ts, model, model_version, input_hash,"
                 " input_text, probs, abstain, abstain_reason, raw_output, latency_ms, input_tokens,"
@@ -77,7 +85,7 @@ class DecisionLog:
         return decision_id
 
     def annotate(self, decision_id: int, passed: bool, action: str, reason: str) -> None:
-        with self.conn:
+        with self._tx():
             self.conn.execute(
                 "UPDATE decisions SET passed_threshold=?, policy_action=?, policy_reason=? WHERE id=?",
                 (int(passed), action, reason, decision_id),
