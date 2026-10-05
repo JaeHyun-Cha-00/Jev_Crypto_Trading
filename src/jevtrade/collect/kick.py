@@ -8,7 +8,7 @@ still covered when the box slept through `--minute` or the container restarted
 after it. It calls nothing but the GitHub API; the run itself (and
 every Jev call) happens in GitHub Actions, as with the schedule.
 
-    python -m jevtrade.collect.kick [--minute 20] [--once]
+    python -m jevtrade.collect.kick [--minute 1] [--once]
 
 Needs $GITHUB_TOKEN with "Actions: read and write" on the repo (a fine-grained
 token; add "Contents: read" so the API's forward log keeps working).
@@ -85,8 +85,9 @@ def next_wake(now: datetime, minute: int) -> datetime:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Start the collect workflow when GitHub's schedule skipped an hour")
     ap.add_argument("--config", default=None)
-    ap.add_argument("--minute", type=int, default=20,
-                    help="minute of the hour to check, after the :11 schedule (default 20)")
+    ap.add_argument("--minute", type=int, default=1,
+                    help="minute of the hour to start checking; Coinbase has the closed hour's "
+                         "candle within seconds (default 1)")
     ap.add_argument("--ref", default="main")
     ap.add_argument("--once", action="store_true", help="check once now and exit")
     args = ap.parse_args()
@@ -99,7 +100,7 @@ def main() -> None:
     run(Kicker(cfg.forward_log.repo, token, args.ref), args.minute, once=args.once)
 
 
-def run(k: Kicker, minute: int = 20, once: bool = False, poll_min: float = 5,
+def run(k: Kicker, minute: int = 1, once: bool = False, poll_min: float = 5,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         sleep: Callable[[float], None] = time.sleep) -> None:
     """From `minute` past every hour on, make sure a collect run started that hour

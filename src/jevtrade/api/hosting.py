@@ -10,7 +10,7 @@ module adds, only when the matching environment variable is set:
   host's health check and the keep-alive ping). Any user name works. Without
   it a hosted dashboard would show the private forward log to anyone.
 - JEVTRADE_KICK=1: run the collect backstop (jevtrade.collect.kick) in a
-  background thread, at minute JEVTRADE_KICK_MINUTE (default 25), so the
+  background thread, at minute JEVTRADE_KICK_MINUTE (default 3), so the
   hourly run starts even when the local docker box is off.
 - JEVTRADE_KEEPALIVE_MIN: every N minutes GET <public URL>/api/health, so a
   free instance that sleeps after idle time stays up for the kick thread.
@@ -96,7 +96,7 @@ def start_background(cfg, env: Mapping[str, str]) -> list[threading.Thread]:
             log.warning("JEVTRADE_KICK=1 but $%s is not set; not starting collect runs",
                         cfg.forward_log.token_env)
         else:
-            minute = int(env.get("JEVTRADE_KICK_MINUTE", "25"))
+            minute = int(env.get("JEVTRADE_KICK_MINUTE", "3"))
             k = Kicker(cfg.forward_log.repo, token, env.get("JEVTRADE_KICK_REF", "main"))
             threads.append(threading.Thread(target=run, args=(k, minute), name="collect-kick", daemon=True))
     every = float(env.get("JEVTRADE_KEEPALIVE_MIN", "0") or 0)
