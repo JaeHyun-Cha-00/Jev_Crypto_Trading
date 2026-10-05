@@ -328,6 +328,24 @@ class ForwardLog:
             h["Authorization"] = f"Bearer {token}"
         return h
 
+    def _why_missing(self) -> str:
+        """Explain a 404 on decisions/: GitHub also answers 404 for a private repo it won't show."""
+        c, get = self.cfg, self._get or _http_get
+        where = f"{c.repo}@{c.branch}"
+        try:
+            get(f"{_API}/repos/{c.repo}", self._headers("application/vnd.github+json"), c.timeout_s)
+        except NotFound:
+            if self._token():
+                return (f"GitHub can't see {c.repo} with {c.token_env}: give the token access to this repo"
+                        " with read-only Contents permission")
+            return f"GitHub can't see {c.repo}; if the repo is private, set {c.token_env}"
+        try:
+            get(f"{_API}/repos/{c.repo}/branches/{quote(c.branch, safe='')}",
+                self._headers("application/vnd.github+json"), c.timeout_s)
+        except NotFound:
+            return f"no branch {c.branch!r} on {c.repo} yet; the collect workflow creates it on its first run"
+        return f"no decisions/ on {where} yet"
+
     def _read_github(self, folder: str) -> tuple[int, list[dict]]:
         get = self._get or _http_get
         c = self.cfg
@@ -336,9 +354,8 @@ class ForwardLog:
         try:
             listing = json.loads(get(url, self._headers("application/vnd.github+json"), c.timeout_s))
         except NotFound:
-            if folder == "decisions":   # GitHub also answers 404 for a private repo without a token
-                hint = "" if self._token() else f"; if the repo is private, set {c.token_env}"
-                raise NotFound(f"no decisions/ on {c.repo}@{c.branch}{hint}") from None
+            if folder == "decisions":
+                raise NotFound(self._why_missing()) from None
             listing = []   # no outcomes until the first horizon closes
         if not isinstance(listing, list):
             raise ValueError(f"unexpected GitHub response for {folder}/")
