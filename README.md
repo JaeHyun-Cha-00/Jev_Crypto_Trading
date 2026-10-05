@@ -37,7 +37,8 @@ cp .env.example .env              # optional; only needed for a private repo's f
 docker compose up -d --build      # read-only API + dashboard
 ```
 
-Then open http://localhost:8080. See
+Then open http://localhost:8080 (or put it on a free public URL: see
+[Live website](#live-website-free-on-render)). See
 [Running on a fresh Linux VM](#running-on-a-fresh-linux-vm) for a server.
 
 ## Setup
@@ -500,6 +501,31 @@ or changed day files. Set `GITHUB_TOKEN` in `.env` if the repo is private
 (a fine-grained token with read-only Contents access on this repo is
 enough). If GitHub won't show the repo, the section says whether the token
 is missing or lacks access. It only reads: no writes, model calls or exchange calls.
+
+## Live website (free, on Render)
+
+`render.yaml` deploys the dashboard as one free Render web service at
+`https://<name>.onrender.com`, so it works from a phone with your computer off.
+`Dockerfile.hosted` builds the dashboard into the API image, and the API serves
+both (`jevtrade.api.hosting`). It costs nothing: Render's free plan gives 750
+instance hours a month, enough for one service around the clock, and needs no card.
+
+Because the page is on the public internet, it asks for `DASHBOARD_PASSWORD`
+(any user name). Only `/api/health` is open, for Render's health check. The
+same service runs the collect backstop (`JEVTRADE_KICK=1`, at :25, after the
+local `collect-kick` at :20, so both can run) and pings itself every 10
+minutes, because free services otherwise sleep after 15 idle minutes.
+
+1. Sign in at https://dashboard.render.com with GitHub and let Render see this repo.
+2. New → Blueprint → pick this repo. Render reads `render.yaml`.
+3. Fill in `DASHBOARD_PASSWORD` (pick one) and `GITHUB_TOKEN` (the one in your
+   `.env`: Contents read, Actions read and write), then Apply.
+4. When the deploy is live, open the `onrender.com` URL shown on the service.
+
+Every merge to `main` that touches the app redeploys. The free plan includes
+500 build minutes a month; without a card on file Render pauses builds (never
+bills) if they run out, and the last deploy keeps serving. If the service ever does sleep, the first visit
+takes about a minute to wake it. Nothing hosted trades or holds exchange keys.
 
 ## Running on a fresh Linux VM
 

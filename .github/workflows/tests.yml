@@ -52,3 +52,5 @@ jobs:
         run: docker compose config --quiet
       - name: Build images
         run: docker compose build
+      - name: Build the hosted image (render.yaml)
+        run: docker build -f Dockerfile.hosted -t jevtrade-hosted .
