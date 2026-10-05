@@ -164,6 +164,7 @@ def test_forward_paper_replays_logged_answers(env):
     assert r["initial_equity"] == cfg.paper.initial_equity and r["last_bar_ts"] is not None
     assert {a["symbol"] for a in r["actions"]} <= {"BTC/USD", "ETH/USD"}
     assert len(c.get("/api/forward/paper", params={"actions": 1}).json()["actions"]) == 1
+    assert len(c.get("/api/forward/paper", params={"hours": 1}).json()["hours"]) == 1
     assert c.post("/api/forward/paper").status_code == 405
 
 

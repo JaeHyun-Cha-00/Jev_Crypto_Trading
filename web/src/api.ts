@@ -128,6 +128,26 @@ export interface JevAction {
   size_frac: number;
 }
 
+/** One hour of Jev's calls (/api/forward/paper `hours`): what it picked, what the account did, how the picks did. */
+export interface JevHour {
+  bar_ts: number;
+  /** coins logged this hour and how many Jev answered; 0 when the collector skipped the hour */
+  asked: number;
+  answered: number;
+  /** answers that met the buy thresholds, highest p(up) first; ret and net (after a round trip
+   * of costs) once the horizon has closed, else null. why: the reason's first word, e.g. skill_gate */
+  picks: { symbol: string; p_up: number; p_down: number; action: JevAction["action"] | null; why: string | null;
+           ret: number | null; net: number | null }[];
+  bought: string[];
+  sold: { symbol: string; why: string }[];
+  /** buys the skill gate held back */
+  held_back: number;
+  /** the average logged coin's return over the same hours; null until the horizon closes */
+  market: number | null;
+  /** when this hour's horizon closes (UTC ms) */
+  resolves_at: number;
+}
+
 export interface JevPaper {
   initial_equity: number;
   fee_bps: number;
@@ -164,6 +184,8 @@ export interface JevPaper {
   actions: JevAction[];
   /** every buy, newest first */
   buys: JevAction[];
+  /** every hour since tracking started, newest first, capped by ?hours= */
+  hours: JevHour[];
   /** hourly calls replayed, all symbols */
   calls: number;
   counts: Partial<Record<JevAction["action"], number>>;
@@ -175,7 +197,7 @@ export interface JevPaper {
 export const getForwardSummary = () => get<ForwardSummary>("/forward/summary");
 export const getForwardRows = (params: { symbol?: string; limit?: number } = {}) =>
   get<ForwardRow[]>("/forward/rows", params);
-export const getJevPaper = (actions = 300) => get<JevPaper>("/forward/paper", { actions });
+export const getJevPaper = (actions = 300, hours = 168) => get<JevPaper>("/forward/paper", { actions, hours });
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
