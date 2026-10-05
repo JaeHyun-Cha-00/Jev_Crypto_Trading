@@ -145,7 +145,8 @@ or down over `horizon_bars`, where "flat" means within ±`flat_band_pct`.
 
 The `decisions` table logs every call with the input hash, input text, model
 version, raw output, latency, input tokens, estimated cost, and the policy's
-verdict.
+verdict. `decision_answers` stores every answer (probabilities, raw `noul`,
+confidence) one row per question, for calibration checks.
 
 **Policy** (`policy/engine.py`) is long-only spot. It runs on bar close, and
 orders fill at the next bar's open.

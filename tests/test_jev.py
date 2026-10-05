@@ -8,11 +8,14 @@ import pytest
 from jevtrade.config import load_config
 from jevtrade.decision.base import JevConfig, default_questions
 from jevtrade.decision.jev import HttpResponse, JevError, JevModel, build_payload
+from jevtrade.decision.log import DecisionLog
+from jevtrade.data.store import connect
+from jevtrade.policy.engine import AccountView, Policy, PolicyConfig, RiskState
 from jevtrade.state.builder import MarketState, estimate_tokens
 
 FIXTURE = Path(__file__).parent / "fixtures" / "jev" / "btc_live"
 PINNED = "typesafe/jev-1.13-20260917"
-QS = default_questions(24, 0.5, 3.0)
+QS = default_questions(4, 1.0, 3.0, "1h")
 
 
 def _state() -> MarketState:
@@ -48,7 +51,7 @@ def _model(*responses, **cfg):
 def test_payload_matches_system_one_schema():
     p = build_payload(PINNED, _state(), QS)
     assert p["model"] == PINNED
-    assert isinstance(p["state"], dict) and p["state"]["horizon_bars"] == 24
+    assert isinstance(p["state"], dict) and p["state"]["horizon_bars"] == 4
     assert set(p["questions"]) == {"direction", "regime", "adverse_move", "clear_signal"}
     assert p["questions"]["direction"]["type"] == "choice"
     assert set(p["questions"]["direction"]["criteria"]) == {"up", "flat", "down"}
@@ -63,16 +66,16 @@ def test_recorded_response_is_parsed():
     assert not d.abstain
     assert d.model == "jev" and d.model_version == PINNED
     assert d.input_hash == _state().input_hash
-    assert d.probs["direction"] == {"up": 0.53, "flat": 0.12, "down": 0.35}
+    assert d.probs["direction"] == {"up": 0.22, "flat": 0.59, "down": 0.19}
     assert d.p("regime", "trend_up") == 0.98
-    assert d.probs["adverse_move"] == pytest.approx({"true": 0.54, "false": 0.46})
-    assert d.probs["clear_signal"] == pytest.approx({"true": 0.59, "false": 0.41})
-    assert d.input_tokens == 1920
-    assert d.cost_usd == pytest.approx(8.064e-05)
-    assert d.extra["estimated_cost_usd"] == pytest.approx(1920 * 0.042e-6)
+    assert d.probs["adverse_move"] == pytest.approx({"true": 0.32, "false": 0.68})
+    assert d.probs["clear_signal"] == pytest.approx({"true": 0.52, "false": 0.48})
+    assert d.input_tokens == 1951
+    assert d.cost_usd == pytest.approx(8.1942e-05)
+    assert d.extra["estimated_cost_usd"] == pytest.approx(1951 * 0.042e-6)
     assert d.extra["served_model"] == PINNED and d.extra["requested_model"] == PINNED
-    assert d.extra["confidence"]["direction"] == 0.3
-    assert json.loads(d.raw_output)["id"] == "gen-dec-1791168980-wL4vIZGwKNDNpCpH5z4g"
+    assert d.extra["answers"]["direction"]["confidence"] == 0.38
+    assert json.loads(d.raw_output)["id"] == "gen-dec-1791169343-sLo1dzWs6ws8qa3Ica4W"
 
 
 def test_call_is_logged_with_version_latency_tokens_cost(caplog):
@@ -80,8 +83,8 @@ def test_call_is_logged_with_version_latency_tokens_cost(caplog):
     with caplog.at_level("INFO", logger="jevtrade.decision.jev"):
         m.decide(_state(), QS)
     line = caplog.records[-1].getMessage()
-    for part in (f"model={PINNED}", f"served={PINNED}", "latency_ms=", "input_tokens=1920",
-                 "est_cost_usd=0.00008064"):
+    for part in (f"model={PINNED}", f"served={PINNED}", "latency_ms=", "input_tokens=1951",
+                 "est_cost_usd=0.00008194"):
         assert part in line
 
 
@@ -90,7 +93,7 @@ def test_cost_falls_back_to_estimate_without_reported_cost():
     del body["usage"]["cost"]
     m, _, _ = _model(HttpResponse(200, json.dumps(body)))
     d = m.decide(_state(), QS)
-    assert d.cost_usd == pytest.approx(1920 * 0.042e-6)
+    assert d.cost_usd == pytest.approx(1951 * 0.042e-6)
 
 
 def test_served_version_drift_abstains():
@@ -99,7 +102,7 @@ def test_served_version_drift_abstains():
     m, _, _ = _model(HttpResponse(200, json.dumps(body)))
     d = m.decide(_state(), QS)
     assert d.abstain and "differs from pinned" in d.abstain_reason
-    assert d.probs == {} and d.input_tokens == 1920
+    assert d.probs == {} and d.input_tokens == 1951
 
 
 def test_missing_answer_abstains():
@@ -166,3 +169,80 @@ def test_default_config_pins_a_dated_snapshot():
     jev = load_config().decision.jev
     assert jev.model == PINNED
     assert jev.price_per_input_token_usd == pytest.approx(0.042e-6)
+
+
+def test_direction_question_is_generated_from_config():
+    q = load_config().decision.resolved_questions("1h")[0]
+    assert q.id == "direction"
+    assert "4 hours (4 bars of 1h)" in q.instructions
+    assert "more than 1% above" in q.options["up"] and "+1%" in q.options["up"]
+    assert "between -1% and +1%" in q.options["flat"]
+    assert "more than 1% below" in q.options["down"] and "-1%" in q.options["down"]
+    q2 = default_questions(6, 0.25, 2.0, "15m")[0]
+    assert "90 minutes (6 bars of 15m)" in q2.instructions and "+0.25%" in q2.options["up"]
+
+
+def _with_nouls(adverse: float, clear: float) -> str:
+    body = json.loads(_body())
+    body["answers"]["adverse_move"]["noul"] = adverse
+    body["answers"]["clear_signal"]["noul"] = clear
+    return json.dumps(body)
+
+
+def test_noul_is_the_yes_probability_with_derived_gate_confidence():
+    # docs.typesafe.ai/primitives/noul: `noul` is P(yes); a Noul has no separate
+    # confidence, and |2p - 1| is the documented confidence-style gate.
+    m, _, _ = _model(HttpResponse(200, _body()))
+    a = m.decide(_state(), QS).extra["answers"]["adverse_move"]
+    assert a["noul"] == 0.32 and a["probabilities"]["true"] == 0.32
+    assert a["choice"] == "false" and a["confidence"] is None
+    assert a["gate_confidence"] == pytest.approx(0.36)
+
+
+def test_policy_reads_direction_probabilities_not_noul_values():
+    acct = AccountView(equity=10_000.0, positions={}, marks={},
+                       risk=RiskState(day_start_equity=10_000.0, day=0, cooldown_until_ts=0))
+    pol = Policy(PolicyConfig(), 3_600_000)
+    actions = []
+    for adverse, clear in [(0.0, 0.0), (1.0, 1.0), (0.99, 0.01)]:
+        m, _, _ = _model(HttpResponse(200, _with_nouls(adverse, clear)))
+        d = m.decide(_state(), QS)
+        a = pol.evaluate("BTC/USDT", 0, 100.0, d, acct)
+        assert a.details == {"p_up": 0.22, "p_down": 0.19}
+        actions.append((a.kind, a.reason))
+    assert len(set(actions)) == 1  # noul answers do not move the policy
+
+
+def test_every_answer_is_stored_for_calibration():
+    conn = connect(":memory:")
+    m, _, _ = _model(HttpResponse(200, _body()))
+    d = m.decide(_state(), QS)
+    i = DecisionLog(conn).record("paper", "BTC/USDT", 123, d, _state().text)
+    rows = {r[0]: r[1:] for r in conn.execute(
+        "SELECT question, qtype, choice, probabilities, noul, confidence, gate_confidence"
+        " FROM decision_answers WHERE decision_id=? ORDER BY question", (i,))}
+    assert set(rows) == {"direction", "regime", "adverse_move", "clear_signal"}
+    assert rows["direction"][:3] == ("choice", "flat", '{"up": 0.22, "flat": 0.59, "down": 0.19}')
+    assert rows["direction"][4:] == (0.38, 0.38)
+    assert rows["adverse_move"][0] == "noul" and rows["adverse_move"][3] == 0.32
+    assert rows["adverse_move"][5] == pytest.approx(0.36)
+    stored = conn.execute("SELECT model_version, raw_output FROM decisions WHERE id=?",
+                          (i,)).fetchone()
+    assert stored[0] == PINNED and json.loads(stored[1]) == json.loads(_body())
+
+
+def test_abstain_stores_no_answer_rows():
+    conn = connect(":memory:")
+    m, _, _ = _model(HttpResponse(502, "{}"), max_retries=0)
+    i = DecisionLog(conn).record("paper", "BTC/USDT", 1, m.decide(_state(), QS), None)
+    assert conn.execute("SELECT abstain FROM decisions WHERE id=?", (i,)).fetchone() == (1,)
+    assert conn.execute("SELECT COUNT(*) FROM decision_answers").fetchone() == (0,)
+
+
+def test_jev_prompt_doc_matches_default_questions():
+    doc = (Path(__file__).parents[1] / "docs" / "jev_prompt.md").read_text()
+    for q in load_config().decision.resolved_questions("1h"):
+        assert f"`{q.id}` ({q.type.capitalize()})" in doc
+        assert q.instructions in doc
+        for k, v in q.options.items():
+            assert f"- `{k}`: {v}" in doc

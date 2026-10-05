@@ -25,8 +25,8 @@ state:
 
 decision:
   model: mock                # mock | baseline | jev
-  horizon_bars: 24
-  flat_band_pct: 0.5
+  horizon_bars: 4            # direction horizon: 4 bars = 4 hours on 1h candles
+  flat_band_pct: 1.0         # "up" > +1%, "down" < -1%, otherwise "flat"
   adverse_move_pct: 3.0      # matches policy.stop_loss_pct; see docs/jev_prompt.md
   mock_abstain_rate: 0.1
   baseline_fast: 20

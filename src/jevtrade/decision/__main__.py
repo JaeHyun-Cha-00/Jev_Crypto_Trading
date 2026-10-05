@@ -3,8 +3,9 @@
     python -m jevtrade.decision --symbol BTC/USDT [--config PATH] [--record DIR]
 
 Fetches recent public candles into an in-memory store, builds the market
-state, asks Jev the configured questions once, and prints the raw response,
-latency, input tokens and cost. `--record DIR` saves the state and response
+state, asks Jev the configured questions once, logs the decision and every
+answer to the configured SQLite store, and prints the raw response, latency,
+input tokens and cost. `--record DIR` saves the state and response
 body as a test fixture (no headers, so no credentials).
 """
 
@@ -24,6 +25,7 @@ from ..data.timeframes import timeframe_ms
 from ..features.compute import compute_features
 from ..state.builder import build_state
 from .jev import JevModel
+from .log import DecisionLog
 
 
 def main() -> None:
@@ -48,8 +50,12 @@ def main() -> None:
     if state is None:
         raise SystemExit(f"not enough history for {symbol}: {len(candles)} candles")
 
-    questions = cfg.decision.resolved_questions()
+    questions = cfg.decision.resolved_questions(cfg.data.timeframe)
     d = JevModel(cfg.decision.jev).decide(state, questions)
+    bar_ts = int(candles.index[-1].timestamp() * 1000)
+    Path(cfg.storage.sqlite_path).parent.mkdir(parents=True, exist_ok=True)
+    decision_id = DecisionLog(connect(cfg.storage.sqlite_path)).record(
+        "live-cli", symbol, bar_ts, d, state.text)
 
     print(f"symbol={symbol} last_closed_bar={candles.index[-1].isoformat()} "
           f"candles={len(candles)} state_est_tokens={state.est_tokens}")
@@ -58,6 +64,7 @@ def main() -> None:
           f"est_cost_usd={d.extra.get('estimated_cost_usd')} "
           f"reported_cost_usd={d.extra.get('reported_cost_usd')}")
     print(f"abstain={d.abstain} reason={d.abstain_reason}")
+    print(f"logged decision id={decision_id} to {cfg.storage.sqlite_path}")
     print("raw_response:")
     print(json.dumps(json.loads(d.raw_output), indent=2) if d.raw_output else "(none)")
 

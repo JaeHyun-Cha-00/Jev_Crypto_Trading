@@ -76,12 +76,27 @@ def build_payload(model: str, state: MarketState, questions: list[QuestionSpec])
     }
 
 
+def noul_confidence(p: float) -> float:
+    """TypeSafe's confidence-style number for a Noul: distance from 0.5, scaled to 0..1.
+
+    Jev returns no `confidence` for a Noul; `noul` itself is P(yes).
+    See https://docs.typesafe.ai/confidence.md#noul.
+    """
+    return abs(2.0 * p - 1.0)
+
+
 def parse_answers(
     answers: dict, questions: list[QuestionSpec]
-) -> tuple[dict[str, dict[str, float]], dict[str, float], list[str]]:
-    """Map Jev answers to {question: {option: p}}, per-question confidence, missing ids."""
+) -> tuple[dict[str, dict[str, float]], dict[str, dict], list[str]]:
+    """Map Jev answers to {question: {option: p}}, a per-question record, and missing ids.
+
+    A Noul's `noul` value is the probability that the answer is yes, so it
+    becomes {"true": p, "false": 1 - p}. Each record keeps the answer as Jev
+    returned it plus `gate_confidence`: Jev's `confidence` for a Choice, and
+    |2p - 1| for a Noul (which has no model-reported confidence).
+    """
     probs: dict[str, dict[str, float]] = {}
-    confidence: dict[str, float] = {}
+    records: dict[str, dict] = {}
     missing: list[str] = []
     for q in questions:
         a = answers.get(q.id)
@@ -91,12 +106,17 @@ def parse_answers(
         if q.type == "noul":
             p = float(a["noul"])
             probs[q.id] = {"true": p, "false": 1.0 - p}
+            records[q.id] = {"type": "noul", "choice": "true" if p >= 0.5 else "false",
+                             "noul": p, "confidence": None, "gate_confidence": noul_confidence(p),
+                             "probabilities": probs[q.id]}
         else:
             raw = a.get("probabilities") or {}
             probs[q.id] = {o: float(raw.get(o, 0.0)) for o in q.options}
-            if "confidence" in a:
-                confidence[q.id] = float(a["confidence"])
-    return probs, confidence, missing
+            conf = float(a["confidence"]) if "confidence" in a else None
+            records[q.id] = {"type": "choice", "choice": a.get("choice"), "noul": None,
+                             "confidence": conf, "gate_confidence": conf,
+                             "probabilities": probs[q.id]}
+    return probs, records, missing
 
 
 class JevModel:
@@ -197,14 +217,14 @@ class JevModel:
                 state, f"served model {served!r} differs from pinned {self.cfg.model!r}",
                 resp.body, latency_ms, extra))
         try:
-            probs, confidence, missing = parse_answers(answers, questions)
+            probs, records, missing = parse_answers(answers, questions)
         except (KeyError, TypeError, ValueError) as e:
             return _with_usage(self._abstain(state, f"malformed answer: {e}", resp.body,
                                              latency_ms, extra))
         if missing:
             return _with_usage(self._abstain(state, f"missing answers: {', '.join(missing)}",
                                              resp.body, latency_ms, extra))
-        extra["confidence"] = confidence
+        extra["answers"] = records
 
         return Decision(
             model=self.name,
