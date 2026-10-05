@@ -437,8 +437,8 @@ It follows the page's symbol filter and refresh. Configure it under
 The GitHub source lists files with the contents API and downloads only new
 or changed day files. Set `GITHUB_TOKEN` in `.env` if the repo is private
 (a fine-grained token with read-only Contents access on this repo is
-enough); without one, a private repo shows "no decisions/ ... set
-GITHUB_TOKEN". It only reads: no writes, model calls or exchange calls.
+enough). If GitHub won't show the repo, the section says whether the token
+is missing or lacks access. It only reads: no writes, model calls or exchange calls.
 
 ## Running on a fresh Linux VM
 

@@ -200,10 +200,46 @@ def test_github_no_outcomes_folder_yet(tmp_path, monkeypatch):
     assert s["error"] is None and s["overall"]["pending"] == 1 and s["overall"]["scored"] == 0
 
 
-def test_github_missing_branch_hints_token_and_redacts(tmp_path, monkeypatch):
+class HiddenRepo(FakeGitHub):
+    """GitHub's view of a private repo the caller can't see: 404 everywhere."""
+
+    def __call__(self, url, headers, timeout_s):
+        self.calls.append((url, headers))
+        raise NotFound(url)
+
+
+def test_github_404_explains_token(monkeypatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    s = ForwardLog(gh_cfg(), http_get=FakeGitHub(tmp_path)).summary()
-    assert s["overall"]["decisions"] == 0 and "GITHUB_TOKEN" in s["error"]
+    s = ForwardLog(gh_cfg(), http_get=HiddenRepo()).summary()
+    assert s["overall"]["decisions"] == 0 and "set GITHUB_TOKEN" in s["error"]
+    monkeypatch.setenv("GITHUB_TOKEN", "tok-without-access")
+    s = ForwardLog(gh_cfg(), http_get=HiddenRepo()).summary()
+    assert "can't see me/repo with GITHUB_TOKEN" in s["error"] and "Contents" in s["error"]
+
+
+def test_github_404_explains_missing_branch_or_folder(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+
+    class Repo(FakeGitHub):
+        def __init__(self, branch_exists):
+            super().__init__(tmp_path)
+            self.branch_exists = branch_exists
+
+        def __call__(self, url, headers, timeout_s):
+            if url == "https://api.github.com/repos/me/repo":
+                return b"{}"
+            if "/branches/" in url:
+                if self.branch_exists:
+                    return b"{}"
+                raise NotFound(url)
+            return super().__call__(url, headers, timeout_s)
+
+    assert "no branch 'data-log'" in ForwardLog(gh_cfg(), http_get=Repo(False)).summary()["error"]
+    assert "no decisions/ on me/repo@data-log" in ForwardLog(gh_cfg(), http_get=Repo(True)).summary()["error"]
+
+
+def test_github_redacts_tokens_in_errors(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
     def leaky(url, headers, timeout_s):
         raise OSError(f"failed {url}?token=SECRET")
