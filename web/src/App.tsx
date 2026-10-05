@@ -352,8 +352,8 @@ export default function App() {
           </div>
           <EquityChart points={equity} initial={paper?.initial_equity ?? 10_000} />
           <p className="caveat small" role="note">
-            <span aria-hidden="true">▲</span> Likely better than real trading. Fills use Coinbase hourly candles, not
-            Robinhood's quotes, and assume every order fills in full. Hours logged before candle highs and lows were
+            <span aria-hidden="true">▲</span> Likely better than real trading. Prices are Coinbase hourly candles with an
+            estimated Robinhood spread, not real Robinhood quotes, and every order is assumed to fill in full. Hours logged before candle highs and lows were
             recorded only check the{pol ? ` ${fmtPct(pol.stop_loss_pct, false)}` : ""} stop-loss on closes.
           </p>
           <p className="muted small">
@@ -413,7 +413,11 @@ export default function App() {
                     <dt>Direction question</dt><dd>±{config.flat_band_pct}% over {config.horizon_bars} hours</dd>
                   </>
                 )}
-                <dt>Costs</dt><dd>{paper.fee_bps} bps fee + {paper.slippage_bps} bps slippage per side</dd>
+                <dt>Costs</dt><dd>
+                  {paper.fee_bps ? `${paper.fee_bps} bps fee + ` : "No fee, "}
+                  {fmtPct(paper.spread_bps.min / 10_000, false)}–{fmtPct(paper.spread_bps.max / 10_000, false)} spread per side
+                  {paper.slippage_bps ? ` + ${paper.slippage_bps} bps slippage` : ""} (Robinhood-like; wider for thin coins)
+                </dd>
               </dl>
             )}
             <p className="muted small pending">
