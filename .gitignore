@@ -24,3 +24,6 @@ dist/
 # Node
 node_modules/
 web/dist/
+
+# Claude Code per-machine settings
+.claude/settings.local.json
