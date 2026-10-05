@@ -132,6 +132,8 @@ export interface JevPaper {
   initial_equity: number;
   fee_bps: number;
   slippage_bps: number;
+  /** per-side spread from the mid, bps: deep coins pay min, the thinnest max */
+  spread_bps: { min: number; max: number };
   policy: { entry_threshold: number; min_edge: number; exit_threshold: number; stop_loss_pct: number; max_holding_bars: number | null };
   equity: number;
   cash: number;

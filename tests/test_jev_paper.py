@@ -4,6 +4,7 @@ import pytest
 
 from jevtrade.api.forward import join
 from jevtrade.api.jev_paper import replay
+from jevtrade.api.settings import JevPaperConfig
 from jevtrade.config import AppConfig
 
 H = 3_600_000
@@ -18,8 +19,15 @@ def row(sym, i, close, up=0.1, down=0.1, status="answered"):
                                       "probabilities": probs}} if status == "answered" else {}}
 
 
-def run(rows):
-    return replay(join(rows, []), AppConfig(), H)
+def old_costs():
+    """The pre-spread cost model (10bps fee, 2bps slippage), so timing tests read in round numbers."""
+    cfg = AppConfig()
+    cfg.jev_paper = JevPaperConfig(fee_bps=10, slippage_bps=2, spread_bps=0, thin_extra_bps=0)
+    return cfg
+
+
+def run(rows, cfg=None):
+    return replay(join(rows, []), cfg or old_costs(), H)
 
 
 def test_empty_log_is_a_flat_account():
@@ -160,3 +168,27 @@ def test_a_late_fill_only_sees_part_of_the_hours_dip():
     rest = _fill_bar(bar, 0, int(0.75 * H), H)
     assert rest.open == 100.0 and rest.low == pytest.approx(97.5) and rest.high == pytest.approx(102.5)
     assert _fill_bar(bar, 0, 0, H) == bar
+
+
+def test_robinhood_spread_is_paid_on_both_sides_and_wider_for_thin_coins():
+    cfg = AppConfig()   # defaults: no fee, 95bps per side, up to +20bps for thin coins
+    assert cfg.jev_paper.fee_bps == 0
+    deep, thin = 1_000_000.0, 10.0          # x $100 close: $100M vs $1k an hour
+    rows = []
+    for sym, vol in (("BTC/USD", deep), ("PNUT/USD", thin)):
+        rows += [_ohlc(row(sym, 0, 100.0, up=0.6, down=0.1), 100.0, 100.0, 100.0, vol)]
+        rows += [_ohlc(row(sym, i, 100.0), 100.0, 100.0, 100.0, vol) for i in range(1, 6)]
+    r = run(rows, cfg)
+    by = {t["symbol"]: t for t in r["trades"]}
+    assert by["BTC/USD"]["entry_price"] == pytest.approx(100.95)
+    assert by["BTC/USD"]["exit_price"] == pytest.approx(99.05)
+    assert by["PNUT/USD"]["entry_price"] == pytest.approx(101.15)
+    assert by["BTC/USD"]["fees"] == 0 and by["BTC/USD"]["pnl"] < 0   # a flat price still loses ~1.9%
+    assert r["spread_bps"] == {"min": 95, "max": 115}
+
+
+def test_spread_scales_on_log_volume():
+    c = JevPaperConfig()
+    assert c.spread_for(5e6) == c.spread_for(5e9) == 95
+    assert c.spread_for(5e5) == pytest.approx(105) and c.spread_for(5e4) == pytest.approx(115)
+    assert c.spread_for(None) == c.spread_for(0) == 115

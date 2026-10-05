@@ -19,6 +19,10 @@ close, and their bar is approximated as: open = the previous hour's logged
 close (this candle's own close when that hour is missing), low = min(open,
 close), so their stops only see closes.
 
+Costs follow `jev_paper` in the config, Robinhood-like by default: no fee,
+and every fill pays a spread from the mid that is wider for coins with little
+Coinbase volume. Stops pay it too.
+
 Within an hour, symbols are evaluated in `Simulator.symbols_by_priority`, the
 same order the backtest and paper loop use: held coins first, then by edge
 (p_up - p_down), highest first, so when the exposure caps leave room for only
@@ -28,9 +32,10 @@ alphabetically first ones.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
+from statistics import median
 
 from ..decision.base import Decision
 from ..sim import SimState, Simulator, Trade
@@ -111,6 +116,19 @@ def _bars(rows: list[dict], tf_ms: int) -> dict[str, dict[int, Bar]]:
     return out
 
 
+def _spreads(bars: dict[str, dict[int, Bar]], cfg) -> dict[str, dict[int, float]]:
+    """Per-side spread (bps) for each coin and hour, from its median hourly dollar volume so far."""
+    out: dict[str, dict[int, float]] = {}
+    for sym, by_ts in bars.items():
+        out[sym], recent = {}, deque(maxlen=cfg.volume_bars)
+        for ts in sorted(by_ts):
+            b = by_ts[ts]
+            if b.volume is not None:
+                recent.append(b.volume * b.close)
+            out[sym][ts] = cfg.spread_for(median(recent) if recent else None)
+    return out
+
+
 def _trade(t: Trade) -> dict:
     return {"symbol": t.symbol, "entry_ts": t.entry_ts, "entry_price": t.entry_price, "exit_ts": t.exit_ts,
             "exit_price": t.exit_price, "qty": t.qty, "fees": t.fees, "pnl": t.pnl, "ret": t.ret,
@@ -120,9 +138,10 @@ def _trade(t: Trade) -> dict:
 def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
     """Simulated Jev account after every logged hour in `rows` (any order)."""
     pcfg = app_cfg.policy.for_model("jev")
-    paper = app_cfg.paper
+    paper = app_cfg.jev_paper
     initial = paper.initial_equity
     base = {"initial_equity": initial, "fee_bps": paper.fee_bps, "slippage_bps": paper.slippage_bps,
+            "spread_bps": {"min": paper.spread_bps, "max": paper.spread_bps + paper.thin_extra_bps},
             "policy": {"entry_threshold": pcfg.entry_threshold, "min_edge": pcfg.min_edge,
                        "exit_threshold": pcfg.exit_threshold, "stop_loss_pct": pcfg.stop_loss_pct,
                        "max_holding_bars": pcfg.max_holding_bars}}
@@ -134,7 +153,9 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
                 "buys": [], "calls": 0, "counts": {}, "per_symbol": {}}
 
     decisions = {(r["symbol"], r["candle_ts"]): r for r in rows}
-    sim = Simulator(pcfg, tf_ms, paper.fee_bps, paper.slippage_bps)
+    spreads = _spreads(bars, paper)
+    sim = Simulator(pcfg, tf_ms, paper.fee_bps, paper.slippage_bps,
+                    spread_bps=lambda s, t: spreads.get(s, {}).get(t, paper.spread_for(None)))
     st = SimState.new(initial, timeline[0])
     trades: list[Trade] = []
     curve, actions = [], []
