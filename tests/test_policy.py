@@ -2,7 +2,7 @@ import pytest
 
 from jevtrade.decision.base import Decision
 from jevtrade.policy.engine import (
-    AccountView, Policy, PolicyConfig, Position, RiskState, register_trade_result, roll_day,
+    AccountView, Policy, PolicyConfig, Position, RiskState, register_trade_result, roll_day, stop_fill,
 )
 
 from conftest import H, T0
@@ -76,6 +76,39 @@ def test_stop_loss_applies_when_model_abstains(pol):
     pos = {SYM: Position(SYM, 10, 100.0, T0, 97.0)}
     assert pol.evaluate(SYM, T0 + H, 96.0, dec(abstain=True), acct(positions=pos)).kind == "exit"
     assert pol.evaluate(SYM, T0 + H, 98.0, dec(abstain=True), acct(positions=pos)).kind == "hold"
+
+
+def test_stop_triggers_on_low_and_fills_at_stop_plus_slippage(pol):
+    # Bar opens above the stop, wicks through it, and closes back above it.
+    pos = {SYM: Position(SYM, 10, 100.0, T0, 97.0)}
+    a = pol.evaluate(SYM, T0 + H, 99.0, dec(up=0.99), acct(positions=pos), bar_open=99.5, bar_low=96.0)
+    assert a.kind == "exit" and a.reason.startswith("stop_loss")
+    assert a.fill_price == pytest.approx(97.0 * (1 - 5 / 10_000))
+
+
+def test_stop_gap_through_fills_at_open_plus_slippage(pol):
+    # Bar opens below the stop: the stop price was never tradable.
+    pos = {SYM: Position(SYM, 10, 100.0, T0, 97.0)}
+    a = pol.evaluate(SYM, T0 + H, 96.0, dec(up=0.99), acct(positions=pos), bar_open=95.0, bar_low=94.0)
+    assert a.kind == "exit" and "gap open" in a.reason
+    assert a.fill_price == pytest.approx(95.0 * (1 - 5 / 10_000))
+
+
+def test_stop_not_hit_when_low_stays_above(pol):
+    pos = {SYM: Position(SYM, 10, 100.0, T0, 97.0)}
+    a = pol.evaluate(SYM, T0 + H, 98.0, dec(up=0.99), acct(positions=pos), bar_open=99.0, bar_low=97.01)
+    assert a.kind == "hold" and a.fill_price is None
+
+
+def test_stop_fill_uses_configured_slippage():
+    assert stop_fill(97.0, 99.0, 98.0, 10) is None
+    assert stop_fill(97.0, 99.0, 97.0, 0) == pytest.approx(97.0)    # touch counts
+    assert stop_fill(97.0, 99.0, 90.0, 20) == pytest.approx(97.0 * 0.998)
+    assert stop_fill(97.0, 97.0, 96.0, 0) == pytest.approx(97.0)    # open exactly at stop
+    p = Policy(PolicyConfig(stop_slippage_bps=50), H)
+    pos = {SYM: Position(SYM, 10, 100.0, T0, 97.0)}
+    a = p.evaluate(SYM, T0 + H, 99.0, dec(), acct(positions=pos), bar_open=99.0, bar_low=96.0)
+    assert a.fill_price == pytest.approx(97.0 * 0.995)
 
 
 def test_max_holding_exit(pol):

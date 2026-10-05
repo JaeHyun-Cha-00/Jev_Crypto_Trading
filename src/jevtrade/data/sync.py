@@ -32,11 +32,17 @@ def sync_symbol(
     start_ms: int,
     now_ms: int | None = None,
     page_limit: int = 1000,
+    deep_history: bool = False,
 ) -> SyncResult:
     """Bring the store up to the last *closed* candle.
 
     The still-forming candle is never stored: everything downstream assumes
     stored candles are final.
+
+    `deep_history` marks a source whose `since` reaches old candles (Coinbase,
+    not Kraken). Pagination then steps over empty windows, and if the store
+    starts after `start_ms` (for example, `start` was moved earlier) the
+    missing head is backfilled.
     """
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     until = last_closed_open_ms(now_ms, tf_ms)
@@ -45,7 +51,14 @@ def sync_symbol(
     since = start_ms if last is None else last + tf_ms
     inserted = 0
     if since <= until:
-        candles = fetch_range(source, symbol, timeframe, since, until, tf_ms, page_limit)
+        candles = fetch_range(source, symbol, timeframe, since, until, tf_ms, page_limit,
+                              skip_empty=deep_history)
+        inserted += store.upsert(exchange, symbol, timeframe, candles)
+
+    first = store.first_ts(exchange, symbol, timeframe)
+    if deep_history and first is not None and first > start_ms:
+        candles = fetch_range(source, symbol, timeframe, start_ms, first - tf_ms, tf_ms,
+                              page_limit, skip_empty=True)
         inserted += store.upsert(exchange, symbol, timeframe, candles)
 
     # One backfill attempt per gap; anything left is a real exchange gap
@@ -53,7 +66,8 @@ def sync_symbol(
     gaps = detect_gaps(store.timestamps(exchange, symbol, timeframe), tf_ms)
     for g in gaps:
         candles = fetch_range(
-            source, symbol, timeframe, g.after_ts + tf_ms, g.before_ts - tf_ms, tf_ms, page_limit
+            source, symbol, timeframe, g.after_ts + tf_ms, g.before_ts - tf_ms, tf_ms, page_limit,
+            skip_empty=deep_history,
         )
         inserted += store.upsert(exchange, symbol, timeframe, candles)
     if gaps:

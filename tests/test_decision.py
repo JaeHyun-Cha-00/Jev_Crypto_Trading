@@ -50,11 +50,21 @@ def test_question_needs_two_options():
         QuestionSpec(id="q", instructions="?", options={"only": "x"})
 
 
+def test_noul_question_needs_true_false():
+    with pytest.raises(ValueError):
+        QuestionSpec(id="q", type="noul", instructions="?", options={"yes": "a", "no": "b"})
+
+
+def test_default_questions_are_the_four_from_jev_prompt():
+    assert [q.id for q in QS] == ["direction", "regime", "adverse_move", "clear_signal"]
+    assert [q.type for q in QS] == ["choice", "choice", "noul", "noul"]
+
+
 def test_factory():
     assert build_model(DecisionConfig(model="mock")).name == "mock"
     assert build_model(DecisionConfig(model="baseline")).name == "baseline"
-    with pytest.raises(NotImplementedError):
-        build_model(DecisionConfig(model="jev"))
+    jev = build_model(DecisionConfig(model="jev"))
+    assert jev.name == "jev" and jev.version == "typesafe/jev-1.13-20260917"
 
 
 def test_decision_log_roundtrip():

@@ -49,11 +49,12 @@ ignores), never from YAML.
 
 ```yaml
 data:
-  exchange: kraken           # any ccxt exchange id with public OHLCV
-  symbols: [BTC/USDT, ETH/USDT]
+  exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken
+  symbols: [BTC/USD, ETH/USD]
   timeframe: 1h
-  start: "2024-01-01T00:00:00Z"   # first candle fetched into an empty store
-  page_limit: 720            # candles per request (kraken max)
+  start: "2025-01-01T00:00:00Z"   # earliest candle kept; backfilled on coinbase
+  page_limit: 300            # candles per request, clamped per exchange
+  requests_trust_env: true   # honour HTTPS_PROXY / REQUESTS_CA_BUNDLE
 storage:
   sqlite_path: data/jevtrade.sqlite
 ```
@@ -72,14 +73,19 @@ python -m jevtrade.data            # sync all configured symbols up to the last 
 - Gaps between stored candles are detected and backfilled once. Gaps that
   remain are real exchange gaps (for example, maintenance). They are logged
   and reported, never interpolated.
-- The default exchange is Kraken. **Limitation:** Kraken's public OHLC
-  endpoint returns only the most recent 720 candles (about 30 days at 1h),
-  whatever `since` is set to. A fresh store therefore starts about 30 days
-  back, not at `start`. If the sync is stopped for longer than that, the
-  missing range is reported as an unresolved gap. For longer backtest
-  history, either set `exchange` to one that pages through history (for
-  example, `coinbase`), or import Kraken's downloadable OHLCVT files (not
-  built yet).
+- The default exchange is Coinbase Exchange (ccxt id `coinbaseexchange`,
+  `api.exchange.coinbase.com`). It returns at most 300 candles per request
+  but pages back through full hourly history, so a fresh store is backfilled
+  to `start` (more than a year of BTC/USD and ETH/USD by default). Windows
+  with no candles, such as an outage, are stepped over and then reported as
+  gaps. If `start` is moved earlier, the missing head is backfilled on the
+  next sync.
+- Kraken remains available: set `exchange: kraken` (the USD symbols exist
+  there too). **Limitation:** Kraken's public OHLC endpoint returns only the
+  most recent 720 candles (about 30 days at 1h), whatever `since` is set to,
+  so a Kraken store starts about 30 days back and a sync stopped for longer
+  leaves an unresolved gap. Stores are keyed by exchange, so Kraken and
+  Coinbase candles never mix.
 - All timestamps are candle open times in UTC epoch milliseconds. DataFrames
   use a tz-aware UTC index.
 
@@ -118,18 +124,35 @@ byte-identical text. The state targets fewer than 2,000 estimated tokens (it
 drops the oldest bars to fit) and is rejected above 32K.
 
 **Decision models** (`decision/`) answer configured questions with a
-probability per option. The default question is `direction`: up, flat or down
-over `horizon_bars`, where "flat" means within ±`flat_band_pct`.
+probability per option. The four default questions are documented in
+[docs/jev_prompt.md](docs/jev_prompt.md). The policy uses `direction`: up, flat
+or down over `horizon_bars`, where "flat" means within ±`flat_band_pct`.
 - `MockModel` is deterministic: its output is a hash of the state, with an
   optional abstain rate or fixed outputs.
 - `BaselineModel` is an SMA crossover expressed through the same interface,
   so it goes through the same policy.
-- `JevModel` is **not implemented yet**. `decision.model: jev` raises an
-  error until the TypeSafe API docs can be read.
+- `JevModel` calls TypeSafe's Jev through OpenRouter's System One endpoint
+  (`POST https://openrouter.ai/api/v1/systemone`), asking all questions in one
+  request. The version is pinned to a dated snapshot in
+  `decision.jev.model` (aliases such as `-latest` are rejected), and a
+  response served by any other version abstains. Each call logs the pinned and
+  served version, latency, input tokens and estimated cost
+  (`input_tokens × price_per_input_token_usd`; OpenRouter's reported cost is
+  used when present). The key comes from `$OPENROUTER_API_KEY`. Transient
+  errors retry, then abstain; auth, billing and bad-request errors raise.
+  Unit tests replay recorded fixtures in `tests/fixtures/jev/`.
+
+  One live decision on the latest closed bar (prints the raw response,
+  latency, tokens and cost; `--record DIR` saves a new fixture):
+
+  ```bash
+  python -m jevtrade.decision --symbol BTC/USDT
+  ```
 
 The `decisions` table logs every call with the input hash, input text, model
 version, raw output, latency, input tokens, estimated cost, and the policy's
-verdict.
+verdict. `decision_answers` stores every answer (probabilities, raw `noul`,
+confidence) one row per question, for calibration checks.
 
 **Policy** (`policy/engine.py`) is long-only spot. It runs on bar close, and
 orders fill at the next bar's open.
@@ -138,8 +161,13 @@ orders fill at the next bar's open.
   trade.
 - **Size** is `risk_per_trade / stop_loss_pct`, capped by `max_position_frac`
   and by the room left under `max_gross_exposure`.
-- **Exits** are checked in order: stop-loss on close, `max_holding_bars`,
+- **Exits** are checked in order: stop-loss, `max_holding_bars`,
   then `p(down) ≥ exit_threshold`. The first two don't depend on the model.
+- **Stops** trigger on the bar's low, not its close. A stopped long fills
+  inside that bar at the stop price, or at the bar's open if it gapped
+  below the stop, less `stop_slippage_bps`. The backtest and paper loops
+  must pass `bar_open` and `bar_low` to `Policy.evaluate` and use the
+  action's `fill_price` instead of the next open.
 - **Blocks:** `max_daily_loss_pct` (measured from equity at the start of the
   UTC day) blocks new entries for the rest of that day. After
   `cooldown_after_losses` consecutive losses, entries pause for

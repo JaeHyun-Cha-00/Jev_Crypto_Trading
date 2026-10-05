@@ -2,11 +2,12 @@
 # variables (see .env.example).
 
 data:
-  exchange: kraken           # any ccxt exchange id with public OHLCV
-  symbols: [BTC/USDT, ETH/USDT]
+  exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken (latest 720 candles only)
+  symbols: [BTC/USD, ETH/USD] # both exist on kraken too
   timeframe: 1h
-  start: "2024-01-01T00:00:00Z"
-  page_limit: 720            # kraken returns at most the latest 720 candles
+  start: "2025-01-01T00:00:00Z" # backfilled on coinbase; kraken can't reach it
+  page_limit: 300            # clamped per exchange: coinbase 300, kraken 720
+  requests_trust_env: true   # use HTTPS_PROXY / REQUESTS_CA_BUNDLE from the environment
 
 storage:
   sqlite_path: data/jevtrade.sqlite
@@ -24,12 +25,21 @@ state:
   target_max_tokens: 2000
 
 decision:
-  model: mock                # mock | baseline | jev (jev not implemented yet)
-  horizon_bars: 24
-  flat_band_pct: 0.5
+  model: mock                # mock | baseline | jev
+  horizon_bars: 4            # direction horizon: 4 bars = 4 hours on 1h candles
+  flat_band_pct: 1.0         # "up" > +1%, "down" < -1%, otherwise "flat"
+  adverse_move_pct: 3.0      # matches policy.stop_loss_pct; see docs/jev_prompt.md
   mock_abstain_rate: 0.1
   baseline_fast: 20
   baseline_slow: 50
+  jev:                       # key comes from $OPENROUTER_API_KEY, never from YAML
+    provider: openrouter
+    base_url: https://openrouter.ai/api/v1
+    model: typesafe/jev-1.13-20260917   # pinned snapshot; aliases are rejected
+    api_key_env: OPENROUTER_API_KEY
+    timeout_s: 30
+    max_retries: 2
+    price_per_input_token_usd: 0.000000042   # $0.042 / Mtok input, output free
 
 policy:                      # all risk limits live here, enforced in code
   entry_threshold: 0.55      # min p(up) to open a long
@@ -37,10 +47,11 @@ policy:                      # all risk limits live here, enforced in code
   exit_threshold: 0.55       # p(down) that closes a long
   risk_per_trade: 0.01       # equity at risk if the stop is hit
   stop_loss_pct: 0.03
+  stop_slippage_bps: 5       # stops trigger on the bar low; fill at stop (or gap open) less this
   max_position_frac: 0.25    # per-symbol notional / equity
   max_gross_exposure: 0.50
   min_trade_frac: 0.01
   max_daily_loss_pct: 0.03   # blocks new entries for the rest of the UTC day
   cooldown_after_losses: 3
   cooldown_bars: 24
-  max_holding_bars: 24
+  # max_holding_bars defaults to decision.horizon_bars (4); set it here to override.
