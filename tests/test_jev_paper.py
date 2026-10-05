@@ -61,3 +61,20 @@ def test_open_position_is_marked_to_the_last_close():
     [p] = r["positions"]
     assert p["mark"] == 101.0 and p["unrealized_pnl"] > 0
     assert r["equity"] > r["cash"]
+
+
+def test_buys_and_calls_cover_every_hour_not_just_recent_actions():
+    rows = [row("BTC/USD", 0, 100.0, up=0.7, down=0.0)] + [row("BTC/USD", i, 100.0) for i in range(1, 6)]
+    rows += [row("ETH/USD", i, 50.0) for i in range(6)]
+    r = run(rows)
+    assert r["calls"] == 12 and [b["symbol"] for b in r["buys"]] == ["BTC/USD"]
+
+
+def test_many_symbols_replay_quickly():
+    import time
+    rows = [row(f"C{k}/USD", i, 100.0 + (i % 7), up=0.6 if i % 50 == 0 else 0.1, down=0.1)
+            for k in range(81) for i in range(48)]
+    t = time.perf_counter()
+    r = run(rows)
+    assert time.perf_counter() - t < 5
+    assert r["calls"] == 81 * 48 and len(r["per_symbol"]) == 81

@@ -133,6 +133,75 @@ const Icon = {
   ),
 };
 
+/** Every coin Jev bought: what it holds now, what it is about to buy, and what it sold. */
+function Bought({ paper, symbol }: { paper: JevPaper | null; symbol: string }) {
+  const mine = <T extends { symbol: string }>(xs: T[]) => xs.filter((x) => !symbol || x.symbol === symbol);
+  const pending = mine(paper?.pending ?? []).filter((p) => p.kind === "enter");
+  const held = mine(paper?.positions ?? []);
+  const sold = mine(paper?.trades ?? []);
+  const base = (s: string) => s.split("/")[0];
+  const count = pending.length + held.length + sold.length;
+  return (
+    <section className="card bought">
+      <div className="card-head">
+        <h2>What Jev bought</h2>
+        <span className="muted small">{count === 0 ? "" : `${held.length} holding · ${pending.length} buying · ${sold.length} sold`}</span>
+      </div>
+      {count === 0 ? (
+        <p className="muted">
+          Jev hasn't bought anything{symbol ? ` on ${symbol}` : ""} yet. It buys when p(up) is at least{" "}
+          {paper?.policy.entry_threshold ?? 0.55} and beats p(down) by {paper?.policy.min_edge ?? 0.1}.
+        </p>
+      ) : (
+        <div className="scroll"><table>
+          <thead>
+            <tr>
+              <th>Coin</th><th>Status</th><th>Bought (UTC)</th><th className="num">Buy price</th><th className="num">Size</th>
+              <th>Sold (UTC)</th><th className="num">Sell price</th><th className="num">P&amp;L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pending.map((p) => (
+              <tr key={`pending-${p.symbol}`}>
+                <td><Coin symbol={p.symbol} /></td>
+                <td><span className="tag">buying</span></td>
+                <td className="muted">next hour's open</td>
+                <td className="num">~{fmtPrice(p.ref_close)}</td>
+                <td className="num">{fmtPct(p.size_frac, false)} of equity</td>
+                <td>–</td><td className="num">–</td><td className="num">–</td>
+              </tr>
+            ))}
+            {held.map((p) => (
+              <tr key={`held-${p.symbol}`}>
+                <td><Coin symbol={p.symbol} /></td>
+                <td><span className="tag enter">holding</span></td>
+                <td>{fmtTime(p.entry_ts)}</td>
+                <td className="num">{fmtPrice(p.entry_price)}</td>
+                <td className="num">${fmtMoney(p.qty * p.entry_price, 0)} <span className="at">{p.qty.toPrecision(3)} {base(p.symbol)}</span></td>
+                <td className="muted">now</td>
+                <td className="num">{fmtPrice(p.mark)}</td>
+                <td className={`num ${tone(p.unrealized_pnl) ?? ""}`}>{fmtMoney(p.unrealized_pnl)} <span className="at">{fmtPct(p.mark / p.entry_price - 1)}</span></td>
+              </tr>
+            ))}
+            {sold.map((t) => (
+              <tr key={`sold-${t.symbol}-${t.entry_ts}`}>
+                <td><Coin symbol={t.symbol} /></td>
+                <td><span className="tag exit" title={t.exit_reason}>sold</span></td>
+                <td>{fmtTime(t.entry_ts)}</td>
+                <td className="num">{fmtPrice(t.entry_price)}</td>
+                <td className="num">${fmtMoney(t.qty * t.entry_price, 0)} <span className="at">{t.qty.toPrecision(3)} {base(t.symbol)}</span></td>
+                <td>{fmtTime(t.exit_ts)}</td>
+                <td className="num">{fmtPrice(t.exit_price)}</td>
+                <td className={`num ${tone(t.pnl) ?? ""}`}>{fmtMoney(t.pnl)} <span className="at">{fmtPct(t.ret)}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table></div>
+      )}
+    </section>
+  );
+}
+
 export default function App() {
   const [data, setData] = useState<Data>(empty);
   const [error, setError] = useState<string | null>(null);
@@ -173,11 +242,12 @@ export default function App() {
   const equity = curve.filter((p) => p.bar_ts >= cutoff);
   const mine = <T extends { symbol: string }>(xs: T[]) => xs.filter((x) => !symbol || x.symbol === symbol);
   const actions = mine(paper?.actions ?? []);
-  const buys = actions.filter((a) => a.action === "enter");
+  const buys = mine(paper?.buys ?? []);
   const trades = mine(paper?.trades ?? []);
-  const positions = mine(paper?.positions ?? []);
-  const pendingBuys = mine(paper?.pending ?? []).filter((p) => p.kind === "enter");
   const symbols = config?.symbols ?? Object.keys(paper?.per_symbol ?? {});
+  // Coins Jev bought at least once (or is buying) get their own chip; the rest sit in a picker.
+  const traded = symbols.filter((s) => (paper?.per_symbol[s]?.buys ?? 0) > 0 || paper?.pending.some((p) => p.symbol === s));
+  const coinRows = Object.entries(paper?.per_symbol ?? {}).filter(([s, v]) => v.buys > 0 && (!symbol || s === symbol));
   const closed = paper?.trades ?? [];
   const wins = closed.filter((t) => t.pnl > 0).length;
   const realized = closed.reduce((s, t) => s + t.pnl, 0);
@@ -220,6 +290,30 @@ export default function App() {
           </div>
         )}
 
+        <nav className="markets" aria-label="Coin">
+          <button className={`chip all ${symbol === "" ? "on" : ""}`} onClick={() => setSymbol("")} aria-pressed={symbol === ""}>
+            All coins
+          </button>
+          {traded.map((s) => (
+            <button key={s} className={`chip ${symbol === s ? "on" : ""}`} onClick={() => setSymbol(s)} aria-pressed={symbol === s}>
+              <Coin symbol={s} />
+            </button>
+          ))}
+          <select
+            className="chip all coin-pick"
+            aria-label="Any coin"
+            value={traded.includes(symbol) ? "" : symbol}
+            onChange={(e) => setSymbol(e.target.value)}
+          >
+            <option value="">{traded.length ? `Other coins (${symbols.length - traded.length})` : `Pick a coin (${symbols.length})`}</option>
+            {symbols.filter((s) => !traded.includes(s)).map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </nav>
+
+        <Bought paper={paper} symbol={symbol} />
+
         <section className="card hero">
           <div className="hero-top">
             <div>
@@ -249,25 +343,14 @@ export default function App() {
           </div>
           <EquityChart points={equity} initial={paper?.initial_equity ?? 10_000} />
           <p className="muted small">
-            Jev's own hourly answers run through the trading rules · {symbols.join(", ") || "no markets yet"} ·
+            Jev's own hourly answers run through the trading rules · {symbols.length > 4 ? `${symbols.length} coins` : symbols.join(", ") || "no coins yet"} ·
             simulated fills, never real orders
           </p>
         </section>
 
-        <nav className="markets" aria-label="Symbol">
-          <button className={`chip all ${symbol === "" ? "on" : ""}`} onClick={() => setSymbol("")} aria-pressed={symbol === ""}>
-            All markets
-          </button>
-          {symbols.map((s) => (
-            <button key={s} className={`chip ${symbol === s ? "on" : ""}`} onClick={() => setSymbol(s)} aria-pressed={symbol === s}>
-              <Coin symbol={s} />
-            </button>
-          ))}
-        </nav>
-
         <section className="tiles">
           <Tile label="Cash" value={fmtMoney(paper?.cash)} sub={`from ${fmtMoney(paper?.initial_equity, 0)} start`} />
-          <Tile label="Buys" value={String(paper?.counts.enter ?? 0)} sub={`out of ${(paper?.actions.length ?? 0)} hourly calls`} />
+          <Tile label="Buys" value={String(paper?.counts.enter ?? 0)} sub={`out of ${paper?.calls ?? 0} hourly calls`} />
           <Tile label="Drawdown" value={fmtPct(paper?.drawdown)} tone={paper && paper.drawdown < 0 ? "down" : undefined} />
           <Tile
             label="Closed trades"
@@ -279,41 +362,15 @@ export default function App() {
 
         <div className="two split">
           <section className="card">
-            <h2>What Jev holds</h2>
-            {positions.length === 0 && pendingBuys.length === 0 ? (
-              <p className="muted">Nothing right now. Jev buys a coin when p(up) is at least {pol?.entry_threshold ?? 0.55} and beats p(down) by {pol?.min_edge ?? 0.1}.</p>
-            ) : (
-              <div className="scroll"><table>
-                <thead>
-                  <tr><th>Coin</th><th className="num">Qty</th><th className="num">Bought at</th><th className="num">Stop</th><th className="num">Now</th><th className="num">Unrealized</th></tr>
-                </thead>
-                <tbody>
-                  {positions.map((p) => (
-                    <tr key={p.symbol}>
-                      <td><Coin symbol={p.symbol} /></td>
-                      <td className="num">{p.qty.toPrecision(5)}</td>
-                      <td className="num">{fmtPrice(p.entry_price)}</td>
-                      <td className="num">{fmtPrice(p.stop_price)}</td>
-                      <td className="num">{fmtPrice(p.mark)}</td>
-                      <td className={`num ${tone(p.unrealized_pnl) ?? ""}`}>{fmtMoney(p.unrealized_pnl)}</td>
-                    </tr>
-                  ))}
-                  {pendingBuys.map((p) => (
-                    <tr key={`pending-${p.symbol}`}>
-                      <td><Coin symbol={p.symbol} /></td>
-                      <td className="num muted" colSpan={5}>buying {fmtPct(p.size_frac, false)} of equity at the next hour's open</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table></div>
-            )}
-            <h3>By coin</h3>
-            <div className="scroll"><table>
+            <h2>Jev by coin</h2>
+            {coinRows.length === 0 ? (
+              <p className="muted small">No buys{symbol ? ` on ${symbol}` : ""} yet across {symbol ? 1 : symbols.length} coin{symbol || symbols.length === 1 ? "" : "s"} watched.</p>
+            ) : <div className="scroll"><table>
               <thead>
                 <tr><th>Coin</th><th className="num">Buys</th><th className="num">Closed</th><th className="num">PnL</th></tr>
               </thead>
               <tbody>
-                {Object.entries(paper?.per_symbol ?? {}).map(([s, v]) => (
+                {coinRows.map(([s, v]) => (
                   <tr key={s}>
                     <td><Coin symbol={s} /></td>
                     <td className="num">{v.buys}</td>
@@ -322,7 +379,10 @@ export default function App() {
                   </tr>
                 ))}
               </tbody>
-            </table></div>
+            </table></div>}
+            {coinRows.length > 0 && !symbol && symbols.length > coinRows.length && (
+              <p className="muted small">{symbols.length - coinRows.length} other coin{symbols.length - coinRows.length === 1 ? "" : "s"} watched, no buys.</p>
+            )}
           </section>
 
           <section className="card">

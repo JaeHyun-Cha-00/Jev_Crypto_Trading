@@ -373,7 +373,10 @@ loop and backtests are no longer shown. It shows:
   Jev already gave in the forward log (`/api/forward/paper`), with the equity
   curve (24 hours, 7 days, 30 days, all), cash, buys, drawdown, closed
   trades and realized PnL. No extra Jev calls and no real orders.
-- What Jev holds (positions, pending buys) and buys, trades and PnL per coin.
+- **What Jev bought**, at the top: every coin it is buying, holding or sold,
+  with times, prices, size and P&L. Coins Jev has bought get a filter chip;
+  the rest of `data.symbols` sit in a picker, so the page scales to many coins.
+- Buys, trades and PnL per coin, for coins Jev has bought.
 - The trading rules in force.
 - Jev's activity: its buys, its closed trades, and every hourly call with
   p(up), p(down), the policy's action and reason, filterable by coin.
@@ -382,7 +385,8 @@ loop and backtests are no longer shown. It shows:
 
 The replay prices each hour from the logged closes (an hour opens at the
 previous hour's close), so stops see closes only, not intrabar dips. It covers
-the symbols the collector asks about (`data.symbols`: BTC/USD and ETH/USD).
+the symbols the collector asks about (`data.symbols`). The replay runs once
+per forward-log refresh and is cached.
 
 It follows the OS light or dark setting and works down to phone width. Set
 `JEVTRADE_API` to point the dev server at an API elsewhere.
