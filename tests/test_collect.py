@@ -47,9 +47,10 @@ class MultiSource(WindowedSource):
         return super().fetch_ohlcv(symbol, timeframe, since, limit)
 
 
-def _collector(tmp_path, transport, source=None, max_backfill=24, symbols=("BTC/USD", "ETH/USD")):
+def _collector(tmp_path, transport, source=None, max_backfill=24, symbols=("BTC/USD", "ETH/USD"), start=None):
     cfg = load_config()
     cfg.data.symbols = list(symbols)
+    cfg.forward_log.start = start   # the default fresh-start date is after the synthetic candles
     model = JevModel(JevConfig(max_retries=0), transport=transport, sleep=lambda s: None)
     return Collector(cfg, model, source or MultiSource(), tmp_path, max_backfill=max_backfill)
 
@@ -80,6 +81,21 @@ def test_first_run_backfills_24_candles_per_symbol(tmp_path):
     assert r["answers"]["adverse_move"]["noul"] == 0.32
     assert "state" not in r and r["raw_response"] is None and r["cost_usd"] > 0
     assert (tmp_path / "README.md").exists()
+
+
+def test_fresh_start_cutoff_limits_the_backfill(tmp_path):
+    from datetime import datetime, timezone
+
+    start = T0 + 1195 * H
+    t = Transport()
+    c = _collector(tmp_path, t, start=datetime.fromtimestamp(start / 1000, tz=timezone.utc))
+    c.run(_now(1200))
+    btc = sorted(r["candle_ts"] for r in _decisions(tmp_path) if r["symbol"] == "BTC/USD")
+    assert btc == [T0 + i * H for i in range(1195, 1201)] and t.calls == 12
+    # Before the start hour nothing is asked at all.
+    t2 = Transport()
+    _collector(tmp_path / "early", t2, start=datetime.fromtimestamp((T0 + 1300 * H) / 1000, tz=timezone.utc)).run(_now(1200))
+    assert t2.calls == 0 and _decisions(tmp_path / "early") == []
 
 
 def test_state_text_goes_to_a_gzip_file_beside_the_decisions(tmp_path):

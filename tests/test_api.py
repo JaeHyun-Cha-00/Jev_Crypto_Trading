@@ -167,7 +167,7 @@ def test_forward_paper_replays_logged_answers(env):
     assert c.post("/api/forward/paper").status_code == 405
 
 
-def test_forward_paper_starts_at_paper_start(env):
+def test_forward_starts_at_start(env):
     from datetime import datetime, timezone
 
     from jevtrade.api.forward import ForwardLog
@@ -178,7 +178,7 @@ def test_forward_paper_starts_at_paper_start(env):
     first = 1791086400000   # first fixture candle, 2026-10-04T04:00Z
     for start_ms, expect_rows in ((first + 3_600_000, True), (first + 30 * 86_400_000, False)):
         c2 = cfg.model_copy(deep=True)
-        c2.forward_log.paper_start = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
+        c2.forward_log.start = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
         fwd = ForwardLog(ForwardLogConfig(source="github", repo="me/repo"), http_get=FakeGitHub())
         r = TestClient(create_app(c2, forward_log=fwd)).get("/api/forward/paper").json()
         assert r["tracking_since"] == start_ms
@@ -186,14 +186,16 @@ def test_forward_paper_starts_at_paper_start(env):
         assert bool(r["actions"]) is expect_rows
         if not expect_rows:   # nothing logged since the start yet: a fresh account
             assert r["equity"] == cfg.paper.initial_equity and r["trades"] == [] and r["curve"] == []
-        # The forward-log stats still include the earlier calls.
-        s = TestClient(create_app(c2, forward_log=fwd)).get("/api/forward/summary").json()
-        assert s["overall"]["decisions"] == 7
+        # The loader drops lines before the start too, so the stats match.
+        fwd2 = ForwardLog(ForwardLogConfig(source="github", repo="me/repo", start=c2.forward_log.start),
+                          http_get=FakeGitHub())
+        s = TestClient(create_app(c2, forward_log=fwd2)).get("/api/forward/summary").json()
+        assert s["overall"]["decisions"] == (5 if expect_rows else 0)   # two of the seven are in the first hour
 
 
-def test_paper_start_reads_naive_and_zoned_times():
+def test_start_reads_naive_and_zoned_times():
     from jevtrade.api.settings import ForwardLogConfig
 
-    assert ForwardLogConfig().paper_start_ms() is None
-    z = ForwardLogConfig(paper_start="2026-10-05T07:00:00Z").paper_start_ms()
-    assert z == ForwardLogConfig(paper_start="2026-10-05T07:00:00").paper_start_ms() == 1791183600000
+    assert ForwardLogConfig().start_ms() is None
+    z = ForwardLogConfig(start="2026-10-05T07:00:00Z").start_ms()
+    assert z == ForwardLogConfig(start="2026-10-05T07:00:00").start_ms() == 1791183600000
