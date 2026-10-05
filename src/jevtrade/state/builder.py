@@ -18,6 +18,8 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
+from ..features.compute import FeatureConfig
+
 # Rough token estimate (≈4 chars/token for JSON-ish English). Good enough for
 # budgeting; the provider's reported usage is logged when available.
 CHARS_PER_TOKEN = 4
@@ -66,13 +68,16 @@ def build_state(
     horizon_bars: int,
     bar_label: str,
     cfg: StateConfig | None = None,
+    feature_cfg: FeatureConfig | None = None,
 ) -> MarketState | None:
     """Build state for the last row of `features`. Returns None if not ready.
 
     `candles` and `features` must already be truncated at the decision time.
-    This function only reads their last rows.
+    This function only reads their last rows. `feature_cfg` must be the
+    config `features` was computed with, so per-bar volume_z matches it.
     """
     cfg = cfg or StateConfig()
+    feature_cfg = feature_cfg or FeatureConfig()
     last = features.iloc[-1]
     if last.isna().any():
         return None
@@ -80,7 +85,10 @@ def build_state(
     close = candles["close"]
     logret = np.log(close).diff()
     lv = np.log(candles["volume"].where(candles["volume"] > 0))
-    vol_z = (lv - lv.rolling(24).mean()) / lv.rolling(24).std()
+    vz_w = feature_cfg.volume_z_window
+    vol_z = (lv - lv.rolling(vz_w, min_periods=vz_w).mean()) / lv.rolling(
+        vz_w, min_periods=vz_w
+    ).std().replace(0, np.nan)
 
     hist_n = cfg.history_bars
     recent = []
@@ -110,7 +118,7 @@ def build_state(
         "description": (
             f"Anonymized state of one liquid crypto asset on {bar_label} bars, ending at the most "
             "recently closed bar. Returns and distances are percent; volume_z is a z-score of log "
-            "volume against the trailing 24 bars; *_pctile is the percentile rank (0-100) of the "
+            f"volume against the trailing {vz_w} bars; *_pctile is the percentile rank (0-100) of the "
             f"current value within the trailing {cfg.percentile_window} bars."
         ),
         "horizon_bars": horizon_bars,
