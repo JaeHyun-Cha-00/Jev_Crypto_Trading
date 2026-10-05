@@ -23,7 +23,7 @@ trade, and when to exit. All risk limits live in code, never in prompts.
 | `src/jevtrade/state/` | Anonymized JSON market state for the model | ✅ stage 3 |
 | `src/jevtrade/decision/` | `DecisionModel`: Mock ✅, Baseline ✅, Jev (pending docs) | ✅ stage 3 (partial) |
 | `src/jevtrade/policy/` | Probabilities → actions, risk limits | ✅ stage 3 |
-| `backtest/` | Event-driven walk-forward backtester | planned |
+| `src/jevtrade/backtest/` | Event-driven walk-forward backtester | ✅ stage 4 |
 | `paper/` | Live paper loop | planned |
 | `report/` | Metrics and daily Markdown summary | planned |
 | `api/` | Read-only FastAPI | planned |
@@ -173,6 +173,46 @@ orders fill at the next bar's open.
   `cooldown_after_losses` consecutive losses, entries pause for
   `cooldown_bars`.
 - Every action records a reason string, including skips.
+
+### 4. Backtest
+
+```bash
+python -m jevtrade.data                      # make sure the store is synced
+python -m jevtrade.backtest --model baseline # or mock; --start/--end ISO-8601 UTC, --symbols ...
+```
+
+`backtest/engine.py` walks every closed bar in time order across the
+configured symbols and runs the same pipeline the paper loop will run:
+features, `build_state()`, `DecisionModel.decide()`, then `Policy.evaluate()`
+with `bar_open` and `bar_low`.
+- Each decision only sees candles up to its bar. Features are computed once
+  and sliced, which is safe because they are causal; a test checks that
+  appending future bars leaves every earlier decision unchanged.
+- Entries and model or holding exits fill at the **next bar's open**, moved
+  `slippage_bps` against the trade. Stop exits fill **inside the bar** at the
+  action's `fill_price`. An entry's stop is re-anchored to its fill price.
+- Every fill pays `fee_bps` on notional. Equity is cash plus positions marked
+  at each close; positions still open at the end close at the last close.
+- `max_holding_bars` defaults to `decision.horizon_bars` (4), so a position is
+  held for the 4 hours the direction question asks about.
+- Every decision is logged to `decisions` / `decision_answers` under the run
+  id. `summary.json`, `summary.md`, `trades.csv` and `equity.csv` go to
+  `backtest.output_dir/<run id>/`.
+- `--model jev` costs one API call per symbol per bar and needs
+  `--allow-live-model`. Runs that end before the pinned snapshot's date are
+  labelled potentially contaminated (see below). Tests never call Jev.
+
+Results on Coinbase BTC/USD and ETH/USD, 1h, 2025-01-01 to 2026-10-05, with the
+default config (10 bps fee and 2 bps slippage per side):
+
+| Model | Return | Max DD | Sharpe | Trades | Win rate | Fees | Buy & hold BTC / ETH |
+|---|---|---|---|---|---|---|---|
+| Mock (hash noise) | −59.8% | −60.1% | −6.7 | 1,360 | 33.4% | 4,547 | −8.2% / −18.7% |
+| Baseline (SMA 20/50) | −68.5% | −69.2% | −6.3 | 1,628 | 33.5% | 4,831 | −8.2% / −18.7% |
+
+Neither offline model has an edge, and with a 4-bar holding period the round
+trip costs (about 24 bps) dominate. These runs check the plumbing and set the
+bar Jev has to clear.
 
 ## Evaluation validity
 

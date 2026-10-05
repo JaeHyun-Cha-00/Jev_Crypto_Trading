@@ -11,6 +11,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .backtest.engine import BacktestConfig
 from .decision.base import DecisionConfig
 from .features.compute import FeatureConfig
 from .policy.engine import PolicyConfig
@@ -51,6 +52,7 @@ class AppConfig(BaseModel):
     state: StateConfig = Field(default_factory=StateConfig)
     decision: DecisionConfig = Field(default_factory=DecisionConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
+    backtest: BacktestConfig = Field(default_factory=BacktestConfig)
 
     @model_validator(mode="after")
     def _holding_follows_horizon(self) -> "AppConfig":

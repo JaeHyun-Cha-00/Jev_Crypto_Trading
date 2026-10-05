@@ -55,3 +55,13 @@ policy:                      # all risk limits live here, enforced in code
   cooldown_after_losses: 3
   cooldown_bars: 24
   # max_holding_bars defaults to decision.horizon_bars (4); set it here to override.
+
+backtest:                    # python -m jevtrade.backtest
+  initial_equity: 10000
+  fee_bps: 10                # per side, on notional
+  slippage_bps: 2            # entries and non-stop exits fill at the next open, moved this much against us
+  start: null                # first decision bar (ISO-8601 UTC); null = all stored data after warm-up
+  end: null
+  output_dir: data/backtests
+  log_decisions: true        # decisions table, under the run id
+  log_inputs: false          # also store each state text (~2KB per decision)
