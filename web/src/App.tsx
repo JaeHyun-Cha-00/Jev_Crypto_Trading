@@ -168,7 +168,7 @@ function Bought({ paper, symbol }: { paper: JevPaper | null; symbol: string }) {
               <tr key={`pending-${p.symbol}`}>
                 <td><Coin symbol={p.symbol} /></td>
                 <td><span className="tag">buying</span></td>
-                <td className="muted">next hour's open</td>
+                <td className="muted">{p.fill_after != null ? `at ${fmtTime(p.fill_after)}` : "next hour's open"}</td>
                 <td className="num">~{fmtPrice(p.ref_close)}</td>
                 <td className="num">{fmtPct(p.size_frac, false)} of equity</td>
                 <td>–</td><td className="num">–</td><td className="num">–</td>
@@ -352,9 +352,9 @@ export default function App() {
           </div>
           <EquityChart points={equity} initial={paper?.initial_equity ?? 10_000} />
           <p className="caveat small" role="note">
-            <span aria-hidden="true">▲</span> Likely better than real trading. The replay only has hourly closes, so the
-            {pol ? ` ${fmtPct(pol.stop_loss_pct, false)}` : ""} stop-loss fires on a close, never on a dip within the hour.
-            Real stops would trigger more often and fill lower.
+            <span aria-hidden="true">▲</span> Likely better than real trading. Prices are Coinbase hourly candles with an
+            estimated Robinhood spread, not real Robinhood quotes. Hours logged before candle highs and lows were
+            recorded only check the{pol ? ` ${fmtPct(pol.stop_loss_pct, false)}` : ""} stop-loss on closes.
           </p>
           <p className="muted small">
             Jev's own hourly answers run through the trading rules · {symbols.length > 4 ? `${symbols.length} coins` : symbols.join(", ") || "no coins yet"} ·
@@ -409,15 +409,23 @@ export default function App() {
                 {config && (
                   <>
                     <dt>Position at stop</dt><dd>{fmtPct(Number(config.sizing.position_frac_at_stop), false)} of equity</dd>
+                    {paper.max_volume_frac != null && (
+                      <><dt>Thin coins</dt><dd>a buy is at most {fmtPct(paper.max_volume_frac, false)} of the coin's hourly dollar volume</dd></>
+                    )}
                     <dt>Max position / gross</dt><dd>{fmtPct(Number(config.sizing.max_position_frac), false)} / {fmtPct(Number(config.sizing.max_gross_exposure), false)}</dd>
                     <dt>Direction question</dt><dd>±{config.flat_band_pct}% over {config.horizon_bars} hours</dd>
                   </>
                 )}
-                <dt>Costs</dt><dd>{paper.fee_bps} bps fee + {paper.slippage_bps} bps slippage per side</dd>
+                <dt>Costs</dt><dd>
+                  {paper.fee_bps ? `${paper.fee_bps} bps fee + ` : "No fee, "}
+                  {fmtPct(paper.spread_bps.min / 10_000, false)}–{fmtPct(paper.spread_bps.max / 10_000, false)} spread per side
+                  {paper.slippage_bps ? ` + ${paper.slippage_bps} bps slippage` : ""} (Robinhood-like; wider for thin coins)
+                </dd>
               </dl>
             )}
             <p className="muted small pending">
-              Fills use the logged hourly closes (each hour opens at the previous close), so stops only see closes.
+              Orders fill when the hourly run actually asked Jev (often late), at a price estimated within that hour.
+              Stops trigger on the hour's low.
             </p>
           </section>
         </div>

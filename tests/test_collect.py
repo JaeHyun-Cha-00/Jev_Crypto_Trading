@@ -81,6 +81,11 @@ def test_first_run_backfills_24_candles_per_symbol(tmp_path):
     assert r["answers"]["adverse_move"]["noul"] == 0.32
     assert "state" not in r and r["raw_response"] is None and r["cost_usd"] > 0
     assert (tmp_path / "README.md").exists()
+    # The candle itself rides along, for intrabar stops and volume-based costs.
+    c = MultiSource().series["BTC/USD"][1177]
+    first = min((r for r in recs if r["symbol"] == "BTC/USD"), key=lambda r: r["candle_ts"])
+    assert [first[k] for k in ("open", "high", "low", "close", "volume")] == pytest.approx(c[1:6])
+    assert first["low"] <= min(first["open"], first["close"]) <= max(first["open"], first["close"]) <= first["high"]
 
 
 def test_fresh_start_cutoff_limits_the_backfill(tmp_path):
@@ -251,3 +256,12 @@ def test_decision_cli_state_matches_the_collector(tmp_path):
     assert int(candles.index[-1].value // 1_000_000) == logged["candle_ts"]
     assert state.text == logged["state"]
     assert _pretty("<html>502</html>") == "<html>502</html>"   # error pages print as-is
+
+
+def test_each_run_writes_one_gzip_member(tmp_path):
+    import zlib
+    _collector(tmp_path, Transport(), max_backfill=1).run(_now(1200))   # one row per symbol
+    [p] = (tmp_path / "state").glob("*.jsonl.gz")
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    assert len(d.decompress(p.read_bytes()).splitlines()) == 2
+    assert d.eof and d.unused_data == b""   # nothing after the first member

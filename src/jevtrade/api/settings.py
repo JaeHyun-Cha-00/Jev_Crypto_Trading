@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -35,3 +36,32 @@ class ForwardLogConfig(BaseModel):
             return None
         ts = self.start if self.start.tzinfo else self.start.replace(tzinfo=timezone.utc)
         return int(ts.timestamp() * 1000)
+
+
+class JevPaperConfig(BaseModel):
+    """Costs for the dashboard's Jev portfolio (jevtrade.api.jev_paper), Robinhood-like by default.
+
+    Robinhood charges no commission on crypto; the cost is its quote spread.
+    Each side pays `spread_bps` from the mid, plus up to `thin_extra_bps` for
+    coins with little Coinbase volume: in full at 100x below
+    `ref_volume_usd` of hourly dollar volume (median of the coin's last 24
+    logged hours), scaled on a log scale in between.
+    """
+
+    initial_equity: float = Field(10_000, gt=0)
+    fee_bps: float = Field(0.0, ge=0, lt=10_000)        # per side, on notional
+    slippage_bps: float = Field(0.0, ge=0, lt=10_000)   # beyond the quoted spread
+    spread_bps: float = Field(95.0, ge=0, lt=10_000)    # per side, deep markets
+    thin_extra_bps: float = Field(20.0, ge=0, lt=10_000)
+    ref_volume_usd: float = Field(5_000_000, gt=0)
+    volume_bars: int = Field(24, ge=1)
+    # A buy never exceeds this share of the coin's median hourly dollar volume;
+    # null = no cap. Hours with no volume logged are not capped.
+    max_volume_frac: float | None = Field(0.01, gt=0, le=1)
+
+    def spread_for(self, dollar_volume: float | None) -> float:
+        """Per-side spread in bps for a coin trading `dollar_volume` an hour; unknown pays the most."""
+        if dollar_volume is None or dollar_volume <= 0:
+            return self.spread_bps + self.thin_extra_bps
+        thin = min(max(math.log10(self.ref_volume_usd / dollar_volume) / 2, 0.0), 1.0)
+        return self.spread_bps + self.thin_extra_bps * thin

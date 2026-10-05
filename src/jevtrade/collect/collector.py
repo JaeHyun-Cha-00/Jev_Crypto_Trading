@@ -13,7 +13,7 @@ retries) are logged with status "error" and asked again on a later run.
 
 The state text Jev was shown (a few KB per call, most of a decision line's
 size) goes to `<out>/state/<YYYY-MM-DD>.jsonl.gz` instead, keyed by `symbol`,
-`candle_ts` and `input_hash`. Each run appends one gzip member per symbol, so
+`candle_ts` and `input_hash`. Each run appends one gzip member, so
 the file only grows at the end and git stores each hour as a small delta.
 Decision lines written before this split still carry `state` inline.
 
@@ -55,7 +55,8 @@ Written by the hourly `collect` workflow on main (`python -m jevtrade.collect`).
 Nothing here trades or simulates positions.
 
 - `decisions/YYYY-MM-DD.jsonl`: one line per Jev call, per symbol and closed 1h
-  candle (day = the candle's open time, UTC). `status` is `answered`, `abstain`
+  candle (day = the candle's open time, UTC), with that candle's `open`, `high`,
+  `low`, `close` and `volume` (base units; older lines have only `close`) and `called_at`, when the call was made. `status` is `answered`, `abstain`
   (Jev responded but the answer was unusable) or `error` (no response; that
   candle is asked again on a later run). `answers` holds every answer as Jev
   returned it; a Noul's `noul` is P(yes).
@@ -169,8 +170,12 @@ def candles_frame(rows: list[list[float]]) -> pd.DataFrame:
 
 
 def decision_record(symbol: str, ts: int, close: float, d: Decision, qhash: str,
-                    called_at_ms: int) -> dict:
-    """One decision line; the state text goes to `StateLog` (see `state_record`)."""
+                    called_at_ms: int, candle: dict | None = None) -> dict:
+    """One decision line; the state text goes to `StateLog` (see `state_record`).
+
+    `candle` adds the candle's open, high, low and volume beside `close`, so the
+    dashboard's replay can trigger stops on intrabar lows and size by volume.
+    """
     if not d.abstain:
         status = "answered"
     elif (d.abstain_reason or "").startswith("request failed"):
@@ -184,6 +189,7 @@ def decision_record(symbol: str, ts: int, close: float, d: Decision, qhash: str,
         "candle_ts": ts,
         "candle_open": ms_to_iso(ts),
         "close": close,
+        **{k: (candle or {}).get(k) for k in ("open", "high", "low", "volume")},
         "called_at": ms_to_iso(called_at_ms),
         "status": status,
         "abstain_reason": d.abstain_reason,
@@ -281,36 +287,37 @@ class Collector:
         have_outcome = {(r["symbol"], r["candle_ts"]) for r in self.outcomes.read(oldest, latest)}
 
         res = CollectResult()
-        for sym in self.cfg.data.symbols:
-            # One coin's exchange error (delisted, rate limit) must not cost the
-            # rest of the pass; that coin is retried next hour.
-            try:
-                df = self.fetch(sym, latest)
-            except Exception as e:  # noqa: BLE001 - ccxt raises many types
-                log.warning("%s: candle fetch failed: %s", sym, e)
-                res.failed_symbols.append(sym)
-                continue
-            if df.empty:
-                log.warning("%s: no candles returned", sym)
-                continue
-            feats = compute_features(df, self.cfg.features)
-            pos = {int(ix.value // 1_000_000): i for i, ix in enumerate(df.index)}
-            states: list[dict] = []
-            try:
-                self._decide(sym, df, feats, pos, first, latest, done, logged, states, res)
-            finally:   # whatever was asked before a failure keeps its state
-                self.states.append(states)
-
-            for rec in logged:
-                key = (rec["symbol"], rec["candle_ts"])
-                if rec["symbol"] != sym or rec.get("status") == "error" or key in have_outcome:
+        # One gzip member per run: a member per call compresses about 2.5x worse.
+        states: list[dict] = []
+        try:
+            for sym in self.cfg.data.symbols:
+                # One coin's exchange error (delisted, rate limit) must not cost the
+                # rest of the pass; that coin is retried next hour.
+                try:
+                    df = self.fetch(sym, latest)
+                except Exception as e:  # noqa: BLE001 - ccxt raises many types
+                    log.warning("%s: candle fetch failed: %s", sym, e)
+                    res.failed_symbols.append(sym)
                     continue
-                out = outcome_record(rec, df, self.tf_ms, horizon, self.cfg.decision.flat_band_pct,
-                                     self.cfg.decision.adverse_move_pct)
-                if out is not None:
-                    self.outcomes.append(out)
-                    have_outcome.add(key)
-                    res.outcomes.append(key)
+                if df.empty:
+                    log.warning("%s: no candles returned", sym)
+                    continue
+                feats = compute_features(df, self.cfg.features)
+                pos = {int(ix.value // 1_000_000): i for i, ix in enumerate(df.index)}
+                self._decide(sym, df, feats, pos, first, latest, done, logged, states, res)
+
+                for rec in logged:
+                    key = (rec["symbol"], rec["candle_ts"])
+                    if rec["symbol"] != sym or rec.get("status") == "error" or key in have_outcome:
+                        continue
+                    out = outcome_record(rec, df, self.tf_ms, horizon, self.cfg.decision.flat_band_pct,
+                                         self.cfg.decision.adverse_move_pct)
+                    if out is not None:
+                        self.outcomes.append(out)
+                        have_outcome.add(key)
+                        res.outcomes.append(key)
+        finally:   # whatever was asked before a failure keeps its state
+            self.states.append(states)
         return res
 
     def _decide(self, sym: str, df: pd.DataFrame, feats, pos: dict[int, int], first: int, latest: int,
@@ -328,8 +335,9 @@ class Collector:
                 log.warning("%s %s: not enough history for a state", sym, ms_to_iso(ts))
                 continue
             d = self.model.decide(state, self.questions)
-            rec = decision_record(sym, ts, float(df["close"].iloc[i]), d, self.qhash,
-                                  int(time.time() * 1000))
+            bar = df.iloc[i]
+            rec = decision_record(sym, ts, float(bar["close"]), d, self.qhash, int(time.time() * 1000),
+                                  {k: float(bar[k]) for k in ("open", "high", "low", "volume")})
             self.decisions.append(rec)
             states.append(state_record(rec, state.text))
             logged.append(rec)

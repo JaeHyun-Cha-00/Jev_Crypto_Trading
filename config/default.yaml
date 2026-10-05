@@ -101,6 +101,21 @@ paper:                       # python -m jevtrade.paper run   (simulated fills o
   daily_report: true         # write the report for each UTC day as its last bar is processed
   lock_path: null            # default: <sqlite_path>.paper.lock
 
+jev_paper:                   # the dashboard's Jev portfolio, replayed from the forward log
+  initial_equity: 10000
+  # Robinhood-like costs. Robinhood charges no commission on crypto; you pay
+  # its quote spread. Robinhood quotes for all 81 coins on 2026-10-05 07:05 UTC
+  # had bid and ask about 0.95% either side of the mid on BTC and ETH and up
+  # to about 1.15% on the thinnest coins, so a round trip costs ~1.9-2.3%.
+  # For an exchange with fees instead: fee_bps = its taker fee, spread_bps ~ 1-5.
+  fee_bps: 0                 # per side, on notional
+  slippage_bps: 0            # beyond the quoted spread
+  spread_bps: 95             # per side from the mid, deep markets (BTC, ETH)
+  thin_extra_bps: 20         # added for thin coins: in full at 100x below ref_volume_usd (log scale)
+  ref_volume_usd: 5000000    # hourly Coinbase dollar volume (median of the last 24 logged hours)
+  volume_bars: 24
+  max_volume_frac: 0.01      # a buy is at most 1% of that hourly dollar volume; null = no cap
+
 report:                      # python -m jevtrade.report [--day YYYY-MM-DD]
   output_dir: reports/out    # <output_dir>/<run id>/<day>.md and .json (git-ignored)
   buckets: 5                 # reliability buckets for p(up)

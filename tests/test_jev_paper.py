@@ -4,6 +4,7 @@ import pytest
 
 from jevtrade.api.forward import join
 from jevtrade.api.jev_paper import replay
+from jevtrade.api.settings import JevPaperConfig
 from jevtrade.config import AppConfig
 
 H = 3_600_000
@@ -18,8 +19,15 @@ def row(sym, i, close, up=0.1, down=0.1, status="answered"):
                                       "probabilities": probs}} if status == "answered" else {}}
 
 
-def run(rows):
-    return replay(join(rows, []), AppConfig(), H)
+def old_costs():
+    """The pre-spread cost model (10bps fee, 2bps slippage), so timing tests read in round numbers."""
+    cfg = AppConfig()
+    cfg.jev_paper = JevPaperConfig(fee_bps=10, slippage_bps=2, spread_bps=0, thin_extra_bps=0)
+    return cfg
+
+
+def run(rows, cfg=None):
+    return replay(join(rows, []), cfg or old_costs(), H)
 
 
 def test_empty_log_is_a_flat_account():
@@ -92,3 +100,108 @@ def test_entries_go_to_the_strongest_edge_not_alphabetical_order():
     bought = {a["symbol"]: a["size_frac"] for a in hour0 if a["action"] == "enter"}
     assert "ZZZ/USD" in bought and "MMM/USD" in bought
     assert bought.get("AAA/USD", 0) < bought["MMM/USD"]
+
+
+def _at(i, minute):
+    """ISO time `minute` minutes into hour i (T0 is 04:00 UTC)."""
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp((T0 + i * H) / 1000 + minute * 60, tz=timezone.utc).isoformat()
+
+
+def test_buy_fills_when_the_run_happened_at_the_interpolated_price():
+    # Hour 0's answer was logged by a run 30 minutes into hour 1 (GitHub started late).
+    rows = [dict(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), called_at=_at(1, 30))]
+    rows += [row("BTC/USD", 1, 110.0), row("BTC/USD", 2, 110.0)]
+    r = run(rows)
+    [p] = r["positions"]
+    assert p["entry_ts"] == T0 + H
+    # Halfway through hour 1: between its open (100) and close (110), plus 2bps slippage.
+    assert p["entry_price"] == pytest.approx(105.0 * 1.0002)
+
+
+def test_a_run_hours_late_fills_hours_later():
+    rows = [dict(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), called_at=_at(3, 0))]
+    rows += [row("BTC/USD", i, 100.0 + i) for i in range(1, 3)]
+    r = run(rows)
+    # The run that saw the answer had not happened by the last logged hour.
+    assert r["positions"] == [] and [p["kind"] for p in r["pending"]] == ["enter"]
+    assert r["pending"][0]["fill_after"] == T0 + 3 * H
+    r = run(rows + [row("BTC/USD", 3, 103.0), row("BTC/USD", 4, 104.0)])
+    [p] = r["positions"]
+    assert p["entry_ts"] == T0 + 3 * H and p["entry_price"] == pytest.approx(102.0 * 1.0002)
+
+
+def test_rows_without_called_at_fill_at_the_next_open():
+    rows = [dict(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), called_at=None), row("BTC/USD", 1, 104.0)]
+    [p] = run(rows)["positions"]
+    assert p["entry_ts"] == T0 + H and p["entry_price"] == pytest.approx(100.0 * 1.0002)
+
+
+def _ohlc(r, o, h, lo, v=1000.0):
+    return dict(r, open=o, high=h, low=lo, volume=v)
+
+
+def test_stop_triggers_on_the_logged_intrabar_low():
+    # Hour 2 dips 5% inside the hour but closes flat: only the real low reveals it.
+    rows = [_ohlc(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), 100.0, 100.5, 99.5),
+            _ohlc(row("BTC/USD", 1, 100.0), 100.0, 100.5, 99.5),
+            _ohlc(row("BTC/USD", 2, 100.0), 100.0, 100.5, 95.0),
+            _ohlc(row("BTC/USD", 3, 100.0), 100.0, 100.5, 99.5)]
+    [t] = run(rows)["trades"]
+    assert t["exit_reason"].startswith("stop_loss") and t["exit_ts"] == T0 + 2 * H
+    stop = 100.0 * 1.0002 * 0.97
+    assert t["exit_price"] == pytest.approx(stop * (1 - 5 / 10_000))
+    # The same hours logged with closes only never stop out.
+    closes_only = run([{k: v for k, v in r.items() if k not in ("open", "high", "low")} for r in rows])
+    assert closes_only["trades"] == [] and len(closes_only["positions"]) == 1
+
+
+def test_close_only_rows_still_open_at_the_previous_close():
+    rows = [row("BTC/USD", 0, 100.0, up=0.6, down=0.1), _ohlc(row("BTC/USD", 1, 104.0), 101.0, 105.0, 100.5)]
+    [p] = run(rows)["positions"]
+    assert p["entry_price"] == pytest.approx(101.0 * 1.0002)   # hour 1's logged open, not hour 0's close
+
+
+def test_a_late_fill_only_sees_part_of_the_hours_dip():
+    from jevtrade.api.jev_paper import Bar, _fill_bar
+    bar = Bar(100.0, 110.0, 90.0, 100.0)
+    rest = _fill_bar(bar, 0, int(0.75 * H), H)
+    assert rest.open == 100.0 and rest.low == pytest.approx(97.5) and rest.high == pytest.approx(102.5)
+    assert _fill_bar(bar, 0, 0, H) == bar
+
+
+def test_robinhood_spread_is_paid_on_both_sides_and_wider_for_thin_coins():
+    cfg = AppConfig()   # defaults: no fee, 95bps per side, up to +20bps for thin coins
+    assert cfg.jev_paper.fee_bps == 0
+    deep, thin = 1_000_000.0, 10.0          # x $100 close: $100M vs $1k an hour
+    rows = []
+    for sym, vol in (("BTC/USD", deep), ("PNUT/USD", thin)):
+        rows += [_ohlc(row(sym, 0, 100.0, up=0.6, down=0.1), 100.0, 100.0, 100.0, vol)]
+        rows += [_ohlc(row(sym, i, 100.0), 100.0, 100.0, 100.0, vol) for i in range(1, 6)]
+    r = run(rows, cfg)
+    by = {t["symbol"]: t for t in r["trades"]}
+    assert by["BTC/USD"]["entry_price"] == pytest.approx(100.95)
+    assert by["BTC/USD"]["exit_price"] == pytest.approx(99.05)
+    assert by["PNUT/USD"]["entry_price"] == pytest.approx(101.15)
+    assert by["BTC/USD"]["fees"] == 0 and by["BTC/USD"]["pnl"] < 0   # a flat price still loses ~1.9%
+    assert r["spread_bps"] == {"min": 95, "max": 115}
+
+
+def test_spread_scales_on_log_volume():
+    c = JevPaperConfig()
+    assert c.spread_for(5e6) == c.spread_for(5e9) == 95
+    assert c.spread_for(5e5) == pytest.approx(105) and c.spread_for(5e4) == pytest.approx(115)
+    assert c.spread_for(None) == c.spread_for(0) == 115
+
+
+def test_buys_are_capped_at_a_share_of_hourly_dollar_volume():
+    cfg = old_costs()
+    cfg.jev_paper.max_volume_frac = 0.01
+    # $100 x 500 = $50k an hour: at most $500 of it, though the rules want ~$3.3k.
+    rows = [_ohlc(row("PNUT/USD", 0, 100.0, up=0.6, down=0.1), 100.0, 100.0, 100.0, 500.0),
+            _ohlc(row("PNUT/USD", 1, 100.0), 100.0, 100.0, 100.0, 500.0)]
+    [p] = run(rows, cfg)["positions"]
+    assert p["qty"] * p["entry_price"] == pytest.approx(500.0)
+    cfg.jev_paper.max_volume_frac = None
+    [p] = run(rows, cfg)["positions"]
+    assert p["qty"] * p["entry_price"] == pytest.approx(10_000 / 3, rel=1e-3)
