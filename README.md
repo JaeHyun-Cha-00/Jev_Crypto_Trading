@@ -49,11 +49,11 @@ ignores), never from YAML.
 
 ```yaml
 data:
-  exchange: kraken           # any ccxt exchange id with public OHLCV
-  symbols: [BTC/USDT, ETH/USDT]
+  exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken
+  symbols: [BTC/USD, ETH/USD]
   timeframe: 1h
-  start: "2024-01-01T00:00:00Z"   # first candle fetched into an empty store
-  page_limit: 720            # candles per request (kraken max)
+  start: "2025-01-01T00:00:00Z"   # earliest candle kept; backfilled on coinbase
+  page_limit: 300            # candles per request, clamped per exchange
 storage:
   sqlite_path: data/jevtrade.sqlite
 ```
@@ -72,14 +72,19 @@ python -m jevtrade.data            # sync all configured symbols up to the last 
 - Gaps between stored candles are detected and backfilled once. Gaps that
   remain are real exchange gaps (for example, maintenance). They are logged
   and reported, never interpolated.
-- The default exchange is Kraken. **Limitation:** Kraken's public OHLC
-  endpoint returns only the most recent 720 candles (about 30 days at 1h),
-  whatever `since` is set to. A fresh store therefore starts about 30 days
-  back, not at `start`. If the sync is stopped for longer than that, the
-  missing range is reported as an unresolved gap. For longer backtest
-  history, either set `exchange` to one that pages through history (for
-  example, `coinbase`), or import Kraken's downloadable OHLCVT files (not
-  built yet).
+- The default exchange is Coinbase Exchange (ccxt id `coinbaseexchange`,
+  `api.exchange.coinbase.com`). It returns at most 300 candles per request
+  but pages back through full hourly history, so a fresh store is backfilled
+  to `start` (more than a year of BTC/USD and ETH/USD by default). Windows
+  with no candles, such as an outage, are stepped over and then reported as
+  gaps. If `start` is moved earlier, the missing head is backfilled on the
+  next sync.
+- Kraken remains available: set `exchange: kraken` (the USD symbols exist
+  there too). **Limitation:** Kraken's public OHLC endpoint returns only the
+  most recent 720 candles (about 30 days at 1h), whatever `since` is set to,
+  so a Kraken store starts about 30 days back and a sync stopped for longer
+  leaves an unresolved gap. Stores are keyed by exchange, so Kraken and
+  Coinbase candles never mix.
 - All timestamps are candle open times in UTC epoch milliseconds. DataFrames
   use a tz-aware UTC index.
 

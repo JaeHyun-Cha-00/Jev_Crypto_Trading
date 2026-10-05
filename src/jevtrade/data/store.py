@@ -59,6 +59,13 @@ class CandleStore:
         ).fetchone()
         return row[0]
 
+    def first_ts(self, exchange: str, symbol: str, timeframe: str) -> int | None:
+        row = self.conn.execute(
+            "SELECT MIN(ts) FROM candles WHERE exchange=? AND symbol=? AND timeframe=?",
+            (exchange, symbol, timeframe),
+        ).fetchone()
+        return row[0]
+
     def timestamps(self, exchange: str, symbol: str, timeframe: str) -> list[int]:
         cur = self.conn.execute(
             "SELECT ts FROM candles WHERE exchange=? AND symbol=? AND timeframe=? ORDER BY ts",
