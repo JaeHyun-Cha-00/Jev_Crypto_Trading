@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { CurvePoint } from "./api";
-import { TZ, fmtMoney, fmtTime } from "./format";
+import type { CurvePoint } from "../lib/api";
+import { TZ, fmtMoney, fmtTime } from "../lib/format";
 
 const NARROW = 600;
 

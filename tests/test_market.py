@@ -4,9 +4,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from jevtrade.api.app import create_app
-from jevtrade.api.forward import ForwardLog
-from jevtrade.api.market import Market, MarketError
-from jevtrade.api.settings import ForwardLogConfig, MarketConfig
+from jevtrade.forward.log import ForwardLog
+from jevtrade.data.market import Market, MarketError
+from jevtrade.data.market import MarketConfig
+from jevtrade.forward.settings import ForwardLogConfig
 from jevtrade.config import AppConfig
 
 SYMS = ["BTC/USD", "ETH/USD"]

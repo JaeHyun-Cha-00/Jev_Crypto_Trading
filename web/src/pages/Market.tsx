@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
-import type { JevAction } from "./api";
-import { fmtCompact, fmtDelta, fmtPct, fmtPrice, fmtUsd } from "./format";
-import type { LiveCoin, LiveMarket } from "./live";
-import { Coin, LivePrice, Sparkline, Star, tone } from "./ui";
+import type { JevAction } from "../lib/api";
+import { fmtCompact, fmtDelta, fmtPct, fmtPrice, fmtUsd } from "../lib/format";
+import type { LiveCoin, LiveMarket } from "../lib/live";
+import { Coin, LivePrice, Sparkline, Star, tone } from "../components/ui";
 
 // The coin list: every tracked coin with its live price, the day's movers, and
 // what Jev thinks of each one.

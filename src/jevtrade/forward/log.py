@@ -15,17 +15,16 @@ import logging
 import math
 import os
 import re
-import ssl
 import threading
 import time
-import urllib.error
-import urllib.request
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 from urllib.parse import quote
 
+from .. import net
+from ..net import HttpGet, NotFound, redact
 from .settings import ForwardLogConfig
 
 log = logging.getLogger(__name__)
@@ -39,39 +38,6 @@ _DROP = ("state", "raw_response")   # large, and not for the browser
 _EPS = 1e-6
 _API = "https://api.github.com"
 _RAW = "https://raw.githubusercontent.com"
-
-
-class NotFound(Exception):
-    """The path does not exist (yet), e.g. no outcomes folder before the first horizon closes."""
-
-
-HttpGet = Callable[[str, dict, float], bytes]
-
-
-def _ssl_context() -> ssl.SSLContext:
-    # Same CA bundle the rest of the app trusts (requests_trust_env), if one is set.
-    for var in ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE"):
-        p = os.environ.get(var)
-        if p and Path(p).is_file():
-            return ssl.create_default_context(cafile=p)
-    return ssl.create_default_context()
-
-
-def _http_get(url: str, headers: dict, timeout_s: float) -> bytes:
-    """GET `url` and return the body; honours HTTPS_PROXY. 404 raises NotFound."""
-    req = urllib.request.Request(url, headers=headers, method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_s, context=_ssl_context()) as r:
-            return r.read()
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            raise NotFound(_redact(url)) from e
-        raise
-
-
-def _redact(text: str) -> str:
-    """Drop URL query strings (GitHub download URLs carry tokens)."""
-    return re.sub(r"\?\S*", "", text)
 
 
 def parse_jsonl(text: str) -> list[dict]:
@@ -265,7 +231,7 @@ class ForwardLog:
                     self._error = None
                 except Exception as e:  # keep the last good data
                     log.warning("forward log refresh failed: %s", e)
-                    self._error = _redact(f"{type(e).__name__}: {e}")[:300]
+                    self._error = redact(f"{type(e).__name__}: {e}")[:300]
             return self._snap
 
     def summary(self) -> dict:
@@ -334,7 +300,7 @@ class ForwardLog:
 
     def _why_missing(self) -> str:
         """Explain a 404 on decisions/: GitHub also answers 404 for a private repo it won't show."""
-        c, get = self.cfg, self._get or _http_get
+        c, get = self.cfg, self._get or net.get
         where = f"{c.repo}@{c.branch}"
         try:
             get(f"{_API}/repos/{c.repo}", self._headers("application/vnd.github+json"), c.timeout_s)
@@ -351,7 +317,7 @@ class ForwardLog:
         return f"no decisions/ on {where} yet"
 
     def _read_github(self, folder: str) -> tuple[int, list[dict]]:
-        get = self._get or _http_get
+        get = self._get or net.get
         c = self.cfg
         ref = quote(c.branch, safe="")
         url = f"{_API}/repos/{c.repo}/contents/{folder}?ref={ref}"

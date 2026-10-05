@@ -3,8 +3,8 @@
 Every route is a GET. The database is opened with SQLite's `mode=ro`, so
 the API cannot write even by mistake, and it never touches an exchange or
 the model. The forward-log routes only read the collector's JSONL, locally
-or from GitHub (jevtrade.api.forward), and /api/forward/paper replays Jev's
-logged answers through the simulator (jevtrade.api.jev_paper). It serves the dashboard (stage 10) and anything else that wants
+or from GitHub (jevtrade.forward.log), and /api/forward/paper replays Jev's
+logged answers through the simulator (jevtrade.forward.portfolio). It serves the dashboard (stage 10) and anything else that wants
 to watch the paper account.
 """
 
@@ -24,9 +24,9 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from ..sim import SimState
 from ..data.timeframes import timeframe_ms
-from .forward import ForwardLog
-from .jev_paper import replay
-from .market import TIMEFRAMES, Market, MarketError
+from ..forward.log import ForwardLog
+from ..forward.portfolio import replay
+from ..data.market import TIMEFRAMES, Market, MarketError
 from .settings import ApiConfig  # noqa: F401  (re-exported)
 
 
@@ -291,7 +291,7 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | 
         out["hours"] = out["hours"][:hours]
         return out
 
-    # -- live market (public Coinbase data; jevtrade.api.market)
+    # -- live market (public Coinbase data; jevtrade.data.market)
 
     def market_call(fn, *args):
         if not app_cfg.market.enabled:

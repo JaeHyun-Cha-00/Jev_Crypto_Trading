@@ -19,8 +19,22 @@ import threading
 import time
 from typing import Callable
 
-from .forward import HttpGet, _http_get, _redact
-from .settings import MarketConfig
+from pydantic import BaseModel, Field
+
+from .. import net
+from ..net import HttpGet, redact
+
+
+class MarketConfig(BaseModel):
+    """Live prices for the dashboard's coin list (jevtrade.data.market): public Coinbase data only."""
+
+    enabled: bool = True
+    base_url: str = "https://api.exchange.coinbase.com"
+    stats_seconds: float = Field(5, ge=1)        # re-read 24-hour stats for all coins at most this often
+    spark_seconds: float = Field(300, ge=30)     # refresh the 24-hour sparklines this often
+    book_seconds: float = Field(2, ge=0.5)       # order book and trades cache
+    min_interval_s: float = Field(0.15, ge=0)    # spacing between Coinbase calls (public limit: 10/s)
+    timeout_s: float = Field(10, gt=0)
 
 log = logging.getLogger(__name__)
 
@@ -74,7 +88,7 @@ class Market:
                  clock: Callable[[], float] = time.time, background: bool = True):
         self.symbols = list(symbols)
         self.cfg = cfg
-        self._get = http_get or _http_get
+        self._get = http_get or net.get
         self._clock = clock
         self._background = background
         self._lock = threading.Lock()
@@ -103,7 +117,7 @@ class Market:
                              self.cfg.timeout_s)
             return json.loads(body)
         except Exception as e:
-            raise MarketError(_redact(f"{type(e).__name__}: {e}")[:300]) from e
+            raise MarketError(redact(f"{type(e).__name__}: {e}")[:300]) from e
 
     def _cached(self, key: tuple, ttl: float, fetch: Callable[[], object]) -> object:
         now = self._clock()
