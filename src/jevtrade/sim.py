@@ -8,9 +8,9 @@ Per bar t, in order:
 1. `begin_bar`: roll the daily-loss baseline (equity at the previous close).
 2. `fill_pending`: orders decided at the close of t-1 fill at t's open, with
    `slippage_bps` against the trader and `fee_bps` on notional.
-3. `on_close`, per symbol: mark to the close, run `Policy.evaluate`, fill a
-   stop inside the bar at `action.fill_price`, queue entries and other exits
-   for the next open.
+3. `on_close`, per symbol in `symbols_by_priority`: mark to the close, run
+   `Policy.evaluate`, fill a stop inside the bar at `action.fill_price`,
+   queue entries and other exits for the next open.
 
 `SimState` round-trips through JSON so the paper loop can persist it.
 """
@@ -147,6 +147,24 @@ class Simulator:
                 st.open[sym] = OpenPosition(Position(sym, qty, px, ts, stop), fee, p.action.reason)
                 st.marks[sym] = float(bar.open)
         return trades
+
+    def symbols_by_priority(self, st: SimState, decisions: dict[str, Decision | None]) -> list[str]:
+        """The order to call `on_close` in for one bar's symbols.
+
+        Held symbols go first, so a stop or exit frees room before any entry
+        is sized. Flat symbols follow by edge (p_up - p_down), highest first,
+        so when the exposure caps leave room for only a few entries the slots
+        go to the strongest signals, not to whichever coin is listed first.
+        Ties, abstains and missing decisions fall back to symbol order.
+        """
+        c = self.pcfg
+
+        def edge(d: Decision | None) -> float:
+            if d is None or d.abstain:
+                return float("-inf")
+            return d.p(c.question, c.up_option) - d.p(c.question, c.down_option)
+
+        return sorted(decisions, key=lambda s: (s not in st.open, -edge(decisions[s]), s))
 
     def mark(self, st: SimState, sym: str, bar: pd.Series) -> None:
         st.marks[sym] = float(bar.close)

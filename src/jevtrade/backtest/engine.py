@@ -12,6 +12,9 @@ Timing (see policy/engine.py):
 - Stop-loss exits fill inside bar t at `action.fill_price` (the policy
   already applied `stop_slippage_bps`); only the fee is added.
 - An entry's stop is re-anchored to its actual fill price.
+- Within a bar, symbols act in `Simulator.symbols_by_priority`: held
+  positions first, then the strongest edge, so capped entry slots go to the
+  best signals.
 
 Features are causal (tests/test_features.py), so they are computed once per
 symbol and sliced at t. The state builder gets a trailing window that is
@@ -32,7 +35,7 @@ from ..decision.log import DecisionLog
 from ..features.compute import FeatureConfig, compute_features
 from ..policy.engine import PolicyConfig
 from ..sim import SimState, Simulator, Trade
-from ..state.builder import StateConfig, build_state
+from ..state.builder import MarketState, StateConfig, build_state
 
 
 class BacktestConfig(BaseModel):
@@ -151,7 +154,10 @@ class Backtester:
             bars = {sym: data[sym][0].iloc[i] for sym in data if (i := row_of[sym].get(ts)) is not None}
             trades += self.sim.fill_pending(st, ts, bars)
 
-            # Decide on this bar's close, symbol by symbol.
+            # Ask the model about every symbol at this bar's close, then act on
+            # them by priority (held first, then strongest edge).
+            states: dict[str, MarketState | None] = {}
+            decisions: dict[str, Decision | None] = {}
             for sym, (df, feats) in data.items():
                 i = row_of[sym].get(ts)
                 if i is None:
@@ -169,7 +175,10 @@ class Backtester:
                     decision = self.model.decide(state, self.questions)
                     counts["decisions"] += 1
                     counts["abstains"] += int(decision.abstain)
+                states[sym], decisions[sym] = state, decision
 
+            for sym in self.sim.symbols_by_priority(st, decisions):
+                state, decision = states[sym], decisions[sym]
                 action, trade = self.sim.on_close(st, sym, ts, bars[sym], decision)
                 counts[action.kind] = counts.get(action.kind, 0) + 1
                 if trade is not None:

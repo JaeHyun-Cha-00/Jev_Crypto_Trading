@@ -41,7 +41,7 @@ from ..decision.base import Decision, DecisionModel
 from ..decision.log import DecisionLog
 from ..features.compute import compute_features
 from ..sim import SimState, Simulator, Trade
-from ..state.builder import build_state
+from ..state.builder import MarketState, build_state
 from .store import PaperStore
 
 log = logging.getLogger(__name__)
@@ -206,6 +206,10 @@ class PaperTrader:
                 self.sim.begin_bar(st, ts)
                 trades += self.sim.fill_pending(st, ts, bars)
                 window = state_window(self.cfg.state, self.cfg.features)
+                # Ask the model about every symbol first, then act in the same
+                # order as the backtest: held first, then strongest edge.
+                states: dict[str, MarketState | None] = {}
+                decisions: dict[str, Decision | None] = {}
                 for sym, (df, feats, rows) in data.items():
                     i = rows.get(ts)
                     if i is None:
@@ -222,6 +226,9 @@ class PaperTrader:
                     if state is None and sym not in st.open and decide:
                         self.sim.mark(st, sym, bars[sym])
                         continue  # warm-up: nothing to decide and nothing to protect
+                    states[sym], decisions[sym] = state, decision
+                for sym in self.sim.symbols_by_priority(st, decisions):
+                    state, decision = states[sym], decisions[sym]
                     action, trade = self.sim.on_close(st, sym, ts, bars[sym], decision)
                     if trade is not None:
                         trades.append(trade)
