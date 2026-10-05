@@ -28,6 +28,7 @@ trade, and when to exit. All risk limits live in code, never in prompts.
 | `src/jevtrade/report/` | Daily Markdown report: account, trades, decisions, calibration | ✅ stage 8 |
 | `src/jevtrade/api/` | Read-only FastAPI over the store and reports | ✅ stage 9 |
 | `web/` | React dashboard over the API | ✅ stage 10 |
+| `src/jevtrade/collect/` | Hourly forward log of Jev answers and outcomes (GitHub Actions → `data-log` branch) | ✅ |
 
 ## Quick start (Docker)
 
@@ -375,6 +376,31 @@ API and refreshes every minute. It shows:
 
 It follows the OS light or dark setting and works down to phone width. Set
 `JEVTRADE_API` to point the dev server at an API elsewhere.
+
+### Forward data collection (GitHub Actions)
+
+`.github/workflows/collect.yml` runs at 7 minutes past every hour (and on
+demand via **Run workflow**). Each run:
+
+- fetches recent public 1h candles for every configured symbol from Coinbase;
+- asks Jev (the pinned snapshot) the configured questions once for each closed
+  candle that has no answer logged yet, looking back at most 24 candles, so a
+  skipped or delayed run is backfilled and no candle is asked twice;
+- logs the realized outcome of each decision once its horizon has closed;
+- commits the JSONL files to the orphan `data-log` branch, never to main.
+
+No trading and no simulated positions. Calls that got no response at all are
+logged with `status: "error"` and asked again on the next run. The key comes
+from the `OPENROUTER_API_KEY` repository secret (Settings → Secrets and
+variables → Actions); the run stops before any call if it is missing. Each
+call costs money: about $0.00008 at the recorded ~2,000 input tokens, so two
+symbols hourly is roughly $0.004 a day.
+
+Locally, against any directory:
+
+```bash
+python -m jevtrade.collect --out data-log --max-backfill 24
+```
 
 ## Running on a fresh Linux VM
 
