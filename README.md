@@ -138,8 +138,13 @@ orders fill at the next bar's open.
   trade.
 - **Size** is `risk_per_trade / stop_loss_pct`, capped by `max_position_frac`
   and by the room left under `max_gross_exposure`.
-- **Exits** are checked in order: stop-loss on close, `max_holding_bars`,
+- **Exits** are checked in order: stop-loss, `max_holding_bars`,
   then `p(down) ≥ exit_threshold`. The first two don't depend on the model.
+- **Stops** trigger on the bar's low, not its close. A stopped long fills
+  inside that bar at the stop price, or at the bar's open if it gapped
+  below the stop, less `stop_slippage_bps`. The backtest and paper loops
+  must pass `bar_open` and `bar_low` to `Policy.evaluate` and use the
+  action's `fill_price` instead of the next open.
 - **Blocks:** `max_daily_loss_pct` (measured from equity at the start of the
   UTC day) blocks new entries for the rest of that day. After
   `cooldown_after_losses` consecutive losses, entries pause for

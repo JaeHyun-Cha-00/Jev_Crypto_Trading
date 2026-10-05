@@ -37,6 +37,7 @@ policy:                      # all risk limits live here, enforced in code
   exit_threshold: 0.55       # p(down) that closes a long
   risk_per_trade: 0.01       # equity at risk if the stop is hit
   stop_loss_pct: 0.03
+  stop_slippage_bps: 5       # stops trigger on the bar low; fill at stop (or gap open) less this
   max_position_frac: 0.25    # per-symbol notional / equity
   max_gross_exposure: 0.50
   min_trade_frac: 0.01
