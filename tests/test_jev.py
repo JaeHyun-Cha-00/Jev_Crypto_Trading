@@ -174,10 +174,10 @@ def test_default_config_pins_a_dated_snapshot():
 def test_direction_question_is_generated_from_config():
     q = load_config().decision.resolved_questions("1h")[0]
     assert q.id == "direction"
-    assert "4 hours (4 bars of 1h)" in q.instructions
-    assert "more than 1% above" in q.options["up"] and "+1%" in q.options["up"]
-    assert "between -1% and +1%" in q.options["flat"]
-    assert "more than 1% below" in q.options["down"] and "-1%" in q.options["down"]
+    assert "24 hours (24 bars of 1h)" in q.instructions
+    assert "more than 3% above" in q.options["up"] and "+3%" in q.options["up"]
+    assert "between -3% and +3%" in q.options["flat"]
+    assert "more than 3% below" in q.options["down"] and "-3%" in q.options["down"]
     q2 = default_questions(6, 0.25, 2.0, "15m")[0]
     assert "90 minutes (6 bars of 15m)" in q2.instructions and "+0.25%" in q2.options["up"]
 
@@ -250,7 +250,7 @@ def test_jev_prompt_doc_matches_default_questions():
 
 def test_max_holding_bars_follows_direction_horizon(tmp_path):
     cfg = load_config()
-    assert cfg.decision.horizon_bars == 4 and cfg.policy.max_holding_bars == 4
+    assert cfg.decision.horizon_bars == 24 and cfg.policy.max_holding_bars == 24
     p = tmp_path / "c.yaml"
     p.write_text("decision: {horizon_bars: 6}\n")
     assert load_config(p).policy.max_holding_bars == 6

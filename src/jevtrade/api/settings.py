@@ -58,6 +58,14 @@ class JevPaperConfig(BaseModel):
     # A buy never exceeds this share of the coin's median hourly dollar volume;
     # null = no cap. Hours with no volume logged are not capped.
     max_volume_frac: float | None = Field(0.01, gt=0, le=1)
+    # Skill gate: buy only while Jev's recent buy signals would have paid. A
+    # signal is any answer that met the policy's buy thresholds, bought or not;
+    # it resolves decision.horizon_bars later. New buys are allowed only while
+    # the signals of the last `gate_lookback_hours` that have resolved returned
+    # more than their round-trip cost on average, and at least
+    # `gate_min_signals` of them have. null = no gate.
+    gate_lookback_hours: int | None = Field(None, ge=1)
+    gate_min_signals: int = Field(30, ge=1)
 
     def spread_for(self, dollar_volume: float | None) -> float:
         """Per-side spread in bps for a coin trading `dollar_volume` an hour; unknown pays the most."""
