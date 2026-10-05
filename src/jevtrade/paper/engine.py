@@ -57,6 +57,7 @@ class PaperConfig(BaseModel):
     max_catchup_bars: int = Field(48, ge=1)   # missed bars beyond this are processed risk-only
     stall_grace_bars: int = Field(3, ge=0)    # process a bar without a lagging symbol after this
     log_inputs: bool = True                   # store each state text with its decision
+    daily_report: bool = True                 # write the report for each UTC day as it ends
     lock_path: str | None = None              # default: <sqlite_path>.paper.lock
 
 
