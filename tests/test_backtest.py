@@ -7,11 +7,13 @@ import pytest
 from jevtrade.backtest import BacktestConfig, Backtester, summarize, write_outputs
 from jevtrade.backtest.engine import contamination_label, state_window
 from jevtrade.config import AppConfig
-from jevtrade.decision.base import default_questions
+from jevtrade.decision.base import Decision, default_questions
 from jevtrade.decision.baseline import BaselineModel
 from jevtrade.decision.log import DecisionLog
 from jevtrade.decision.mock import MockModel
 from jevtrade.features.compute import FeatureConfig, compute_features
+from jevtrade.policy.engine import Position
+from jevtrade.sim import OpenPosition, SimState, Simulator
 from jevtrade.data.store import connect
 from jevtrade.state.builder import StateConfig, build_state
 
@@ -203,3 +205,50 @@ def test_summary_shows_sizing(tmp_path):
     assert z["max_position_frac"] == 0.5 and z["max_daily_loss_pct"] == 0.03
     out = write_outputs(res, s, tmp_path)
     assert "risk-based" in (out / "summary.md").read_text()
+
+
+
+class ByState:
+    """Fixed probabilities per exact state text; anything else is a clear 'no'."""
+
+    name, version = "mock", "by-state"
+
+    def __init__(self, probs_by_text: dict[str, dict]):
+        self.probs_by_text = probs_by_text
+
+    def decide(self, state, questions):
+        no = {"direction": {"up": 0.0, "flat": 1.0, "down": 0.0}}
+        return Decision(self.name, self.version, state.input_hash, self.probs_by_text.get(state.text, no))
+
+
+def _state_at(df, i):
+    feats = compute_features(df)
+    return build_state(df.iloc[: i + 1], feats.iloc[: i + 1], 4, "1h", StateConfig(), FeatureConfig())
+
+
+def test_entries_go_to_the_strongest_edge_not_config_order():
+    # Three symbols signal on the same bar; the 50% gross cap leaves room for one
+    # full 33% position and a partial one. Config order is AAA, MMM, ZZZ, but the
+    # slots must go to ZZZ (edge 0.90), then MMM (0.65), leaving AAA (0.16) out.
+    dfs = {s: flat_tail(WARMUP, 8, seed=k) for k, s in enumerate(("AAA", "MMM", "ZZZ"))}
+    edges = {"AAA": (0.56, 0.40), "MMM": (0.70, 0.05), "ZZZ": (0.90, 0.00)}
+    probs = {_state_at(dfs[s], WARMUP).text: {"direction": {"up": u, "flat": 1 - u - d, "down": d}}
+             for s, (u, d) in edges.items()}
+    res = bt(ByState(probs), cfg=at_flat(dfs["AAA"])).run(dfs)
+    entries = {t.symbol: t.qty * t.entry_price for t in res.trades}
+    assert set(entries) == {"ZZZ", "MMM"}
+    assert entries["ZZZ"] == pytest.approx(10_000 / 3, rel=1e-3)   # full 1% risk / 3% stop
+    assert entries["MMM"] < entries["ZZZ"]                          # what was left under the cap
+
+
+def test_held_positions_act_before_entries():
+    sim = Simulator(AppConfig().policy, H, 0, 0)
+    st = SimState.new(10_000, 0)
+    st.open["HELD"] = OpenPosition(Position("HELD", 1.0, 100.0, 0, 97.0), 0.0, "test")
+
+    def d(up, down, abstain=False):
+        return Decision("m", "v", "h", {"direction": {"up": up, "flat": 1 - up - down, "down": down}},
+                        abstain=abstain)
+    decisions = {"AAA": d(0.6, 0.1), "BBB": d(0.9, 0.0), "CCC": d(0.6, 0.1), "HELD": d(0.0, 0.9),
+                 "NONE": None, "ABST": d(0.9, 0.0, abstain=True)}
+    assert sim.symbols_by_priority(st, decisions) == ["HELD", "BBB", "AAA", "CCC", "ABST", "NONE"]

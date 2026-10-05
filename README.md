@@ -207,6 +207,12 @@ with `bar_open` and `bar_low`.
 - Each decision only sees candles up to its bar. Features are computed once
   and sliced, which is safe because they are causal; a test checks that
   appending future bars leaves every earlier decision unchanged.
+- Within a bar, coins act in priority order: open positions first (a stop
+  frees room before anything new is sized), then the rest by edge
+  (p(up) − p(down)), highest first. When the exposure caps leave room for
+  only a few entries, the strongest signals get them, not the coins listed
+  first in `data.symbols`. The paper loop and the dashboard's Jev replay use
+  the same order.
 - Entries and model or holding exits fill at the **next bar's open**, moved
   `slippage_bps` against the trade. Stop exits fill **inside the bar** at the
   action's `fill_price`. An entry's stop is re-anchored to its fill price.
