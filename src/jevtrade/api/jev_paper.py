@@ -20,7 +20,10 @@ close (this candle's own close when that hour is missing), low = min(open,
 close), so their stops only see closes.
 
 Costs follow `jev_paper` in the config, Robinhood-like by default: no fee,
-and every fill pays a spread from the mid that is wider for coins with little
+and every fill pays a spread from the mid. That spread is Robinhood's own: the
+bid and ask the collect run logged for the coin (`rh_bid`, `rh_ask`), the
+latest one at or before the fill's hour. A coin with no logged quote yet pays
+the configured estimate instead, which is wider for coins with little
 Coinbase volume. Stops pay it too. A buy is also capped at `max_volume_frac`
 of the coin's median hourly dollar volume, so a thin coin gets a small
 position however confident Jev is.
@@ -126,6 +129,21 @@ def _bars(rows: list[dict], tf_ms: int) -> dict[str, dict[int, Bar]]:
     return out
 
 
+def _quoted_spreads(rows: list[dict]) -> dict[str, tuple[list[int], list[float]]]:
+    """Per coin, the hours with a logged Robinhood quote and its per-side spread in bps, oldest first."""
+    by_sym: dict[str, list[tuple[int, float]]] = defaultdict(list)
+    for r in rows:
+        bid, ask = _num(r.get("rh_bid")), _num(r.get("rh_ask"))
+        if bid is None or ask is None or not 0 < bid <= ask:
+            continue
+        by_sym[r["symbol"]].append((r["candle_ts"], (ask - bid) / (ask + bid) * 10_000))
+    out = {}
+    for sym, pts in by_sym.items():
+        pts.sort()
+        out[sym] = ([t for t, _ in pts], [b for _, b in pts])
+    return out
+
+
 def _dollar_volumes(bars: dict[str, dict[int, Bar]], n: int) -> dict[str, dict[int, float | None]]:
     """Median hourly dollar volume of each coin's last `n` logged hours, as of each hour."""
     out: dict[str, dict[int, float | None]] = {}
@@ -166,7 +184,7 @@ class SkillGate:
     """
 
     def __init__(self, decisions: dict, bars: dict[str, dict[int, Bar]], pcfg: PolicyConfig, paper,
-                 volume: Callable[[str, int], float | None], horizon_bars: int, tf_ms: int):
+                 spread: Callable[[str, int], float], horizon_bars: int, tf_ms: int):
         self.lookback_ms = paper.gate_lookback_hours * 3_600_000
         self.hours = paper.gate_lookback_hours
         self.min_signals = paper.gate_min_signals
@@ -193,7 +211,7 @@ class SkillGate:
             r = ret(sym, t)
             if p_up < pcfg.entry_threshold or p_up - p_down < pcfg.min_edge or r is None:
                 continue
-            side = (paper.spread_for(volume(sym, t)) + paper.slippage_bps + paper.fee_bps) / 10_000
+            side = (spread(sym, t) + paper.slippage_bps + paper.fee_bps) / 10_000
             signals.append((t, r - 2 * side, r - market[t]))
         signals.sort()
         self.ts = [t for t, _, _ in signals]
@@ -227,6 +245,7 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
     initial = paper.initial_equity
     base = {"initial_equity": initial, "fee_bps": paper.fee_bps, "slippage_bps": paper.slippage_bps,
             "spread_bps": {"min": paper.spread_bps, "max": paper.spread_bps + paper.thin_extra_bps},
+            "spread_source": "estimate", "quoted_symbols": 0,
             "max_volume_frac": paper.max_volume_frac,
             "policy": {"entry_threshold": pcfg.entry_threshold, "min_edge": pcfg.min_edge,
                        "exit_threshold": pcfg.exit_threshold, "exit_min_edge": pcfg.exit_min_edge,
@@ -247,13 +266,21 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
     def volume(sym: str, ts: int) -> float | None:
         return volumes.get(sym, {}).get(ts)
 
+    quoted = _quoted_spreads(rows)
+
+    def spread(sym: str, ts: int) -> float:
+        """Per-side bps: the latest Robinhood quote logged at or before `ts`, else the estimate."""
+        q = quoted.get(sym)
+        i = bisect_right(q[0], ts) if q else 0
+        return q[1][i - 1] if i else paper.spread_for(volume(sym, ts))
+
     def max_notional(sym: str, ts: int) -> float:
         v = volume(sym, ts)
         return float("inf") if v is None or paper.max_volume_frac is None else v * paper.max_volume_frac
 
     sim = Simulator(pcfg, tf_ms, paper.fee_bps, paper.slippage_bps,
-                    spread_bps=lambda s, t: paper.spread_for(volume(s, t)), max_notional=max_notional)
-    skill = (SkillGate(decisions, bars, pcfg, paper, volume, app_cfg.decision.horizon_bars, tf_ms)
+                    spread_bps=spread, max_notional=max_notional)
+    skill = (SkillGate(decisions, bars, pcfg, paper, spread, app_cfg.decision.horizon_bars, tf_ms)
              if paper.gate_lookback_hours is not None else None)
     gate: Gate | None = None
     st = SimState.new(initial, timeline[0])
@@ -305,6 +332,10 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
         curve.append({"bar_ts": ts, "equity": eq, "cash": st.cash})
 
     eq = st.equity()
+    latest = [q[1][-1] for q in quoted.values()]
+    if latest:   # what the coins pay now, from their latest quotes
+        base["spread_bps"] = {"min": min(latest), "max": max(latest)}
+        base.update(spread_source="robinhood", quoted_symbols=len(latest))
     per_symbol = {}
     for sym in sorted(bars):
         ts_ = [t for t in trades if t.symbol == sym]

@@ -2,7 +2,8 @@
 
     python -m jevtrade.collect --out DIR [--config PATH] [--max-backfill 24] [--require-key]
 
-Asks Jev about every closed candle of the configured symbols, within the last
+Asks Jev about every closed candle of the tracked symbols (the live
+Robinhood/Coinbase list with `data.symbols_live`), within the last
 `--max-backfill` candles, that DIR has no answer for yet, then logs realized
 outcomes for decisions whose horizon has closed. Each Jev call costs money.
 `--require-key` stops before any call unless $OPENROUTER_API_KEY is set; the
@@ -17,6 +18,7 @@ import os
 
 from ..config import load_config
 from ..data.fetcher import public_exchange
+from ..data.live import resolve_symbols, robinhood_quotes
 from ..decision.jev import JevModel
 from .collector import Collector
 
@@ -39,9 +41,10 @@ def main() -> None:
     if args.require_key and not os.environ.get(key_env):
         raise SystemExit(f"${key_env} is not set; add it as a repository secret")
 
+    resolve_symbols(cfg.data)
     source = public_exchange(cfg.data.exchange, cfg.data.requests_trust_env)
     res = Collector(cfg, JevModel(cfg.decision.jev), source, args.out,
-                    max_backfill=args.max_backfill).run()
+                    max_backfill=args.max_backfill, quotes=robinhood_quotes).run()
     print(f"jev_calls={len(res.called)} errors={len(res.errors)} "
           f"outcomes={len(res.outcomes)} failed_symbols={len(res.failed_symbols)} "
           f"cost_usd={res.cost_usd:.6f}")
