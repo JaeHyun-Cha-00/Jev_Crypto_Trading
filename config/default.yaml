@@ -45,16 +45,21 @@ policy:                      # all risk limits live here, enforced in code
   entry_threshold: 0.55      # min p(up) to open a long
   min_edge: 0.10             # min p(up) - p(down)
   exit_threshold: 0.55       # p(down) that closes a long
+  # Sizing is risk-based: notional = equity x risk_per_trade / stop distance,
+  # capped at max_position_frac. With a 3% stop that is 33% of equity per position.
   risk_per_trade: 0.01       # equity at risk if the stop is hit
   stop_loss_pct: 0.03
   stop_slippage_bps: 5       # stops trigger on the bar low; fill at stop (or gap open) less this
-  max_position_frac: 0.25    # per-symbol notional / equity
+  max_position_frac: 0.50    # per-symbol notional / equity
   max_gross_exposure: 0.50
   min_trade_frac: 0.01
   max_daily_loss_pct: 0.03   # blocks new entries for the rest of the UTC day
   cooldown_after_losses: 3
   cooldown_bars: 24
+  min_trade_interval_bars: 4 # bars after an exit before the same symbol can re-enter
   # max_holding_bars defaults to decision.horizon_bars (4); set it here to override.
+  max_holding_bars_by_model: # per decision model; null = no time exit
+    baseline: null           # exits when the SMA crosses back (or on the stop)
 
 backtest:                    # python -m jevtrade.backtest
   initial_equity: 10000

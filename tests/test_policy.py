@@ -34,8 +34,8 @@ def pol():
 def test_enter_when_confident(pol):
     a = pol.evaluate(SYM, T0, 100.0, dec(up=0.7, down=0.1), acct())
     assert a.kind == "enter" and a.passed_threshold
-    # risk 1% / 3% stop = 33% capped at max_position_frac 25%
-    assert a.size_frac == pytest.approx(0.25)
+    # risk 1% of equity over a 3% stop distance = 33% notional, under the 50% cap
+    assert a.size_frac == pytest.approx(0.01 / 0.03)
     assert a.stop_price == pytest.approx(97.0)
     assert "entry" in a.reason
 
@@ -163,3 +163,52 @@ def test_config_rejects_position_cap_above_gross():
 def test_every_action_has_reason(pol):
     for d in [dec(up=0.9), dec(up=0.2), dec(abstain=True), None]:
         assert pol.evaluate(SYM, T0, 100.0, d, acct()).reason
+
+
+def test_risk_sizing_capped_at_half_of_equity():
+    # A 1% stop would need 100% notional to risk 1%; the cap holds it at 50%.
+    p = Policy(PolicyConfig(stop_loss_pct=0.01, max_gross_exposure=1.0), H)
+    a = p.evaluate(SYM, T0, 100.0, dec(up=0.7), acct())
+    assert a.size_frac == pytest.approx(0.5)
+    assert PolicyConfig().max_position_frac == 0.5 and PolicyConfig().risk_per_trade == 0.01
+
+
+def test_risk_at_stop_is_risk_per_trade():
+    cfg = PolicyConfig()
+    a = Policy(cfg, H).evaluate(SYM, T0, 250.0, dec(up=0.7), acct())
+    loss_at_stop = a.size_frac * (250.0 - a.stop_price) / 250.0
+    assert loss_at_stop == pytest.approx(cfg.risk_per_trade)
+
+
+def test_min_trade_interval_blocks_reentry(pol):
+    a = acct()
+    register_trade_result(a.risk, +5, T0, H, pol.cfg, SYM)
+    for k in range(4):
+        r = pol.evaluate(SYM, T0 + k * H, 100.0, dec(up=0.7), a)
+        assert r.kind == "skip" and r.reason.startswith("min_trade_interval")
+    assert pol.evaluate(SYM, T0 + 4 * H, 100.0, dec(up=0.7), a).kind == "enter"
+    # Other symbols are unaffected.
+    assert pol.evaluate("ETH/USDT", T0, 100.0, dec(up=0.7), a).kind == "enter"
+
+
+def test_min_trade_interval_zero_disables():
+    p = Policy(PolicyConfig(min_trade_interval_bars=0), H)
+    a = acct()
+    register_trade_result(a.risk, +5, T0, H, p.cfg, SYM)
+    assert p.evaluate(SYM, T0, 100.0, dec(up=0.7), a).kind == "enter"
+
+
+def test_max_holding_per_model():
+    cfg = PolicyConfig(max_holding_bars=4)
+    assert cfg.for_model("mock").max_holding_bars == 4
+    assert cfg.for_model("baseline").max_holding_bars is None
+    assert PolicyConfig(max_holding_bars_by_model={"jev": 8}).for_model("jev").max_holding_bars == 8
+    with pytest.raises(ValueError):
+        PolicyConfig(max_holding_bars_by_model={"jev": 0})
+    # No time exit: a position held for 100 bars stays open while the model is not bearish.
+    p = Policy(cfg.for_model("baseline"), H)
+    pos = Position(SYM, 1.0, 100.0, T0, 97.0)
+    a = p.evaluate(SYM, T0 + 100 * H, 100.0, dec(up=1.0), acct(positions={SYM: pos}, marks={SYM: 100.0}))
+    assert a.kind == "hold"
+    a = p.evaluate(SYM, T0 + 100 * H, 100.0, dec(down=1.0), acct(positions={SYM: pos}, marks={SYM: 100.0}))
+    assert a.kind == "exit" and a.reason.startswith("model_exit")
