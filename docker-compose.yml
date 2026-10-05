@@ -1,0 +1,49 @@
+# One command runs the paper loop, the read-only API and the dashboard:
+#
+#   docker compose up -d --build
+#
+# Dashboard: http://localhost:8080 (bound to localhost only; see README for
+# reaching it from your laptop over SSH). Paper trading only: nothing here
+# places real orders.
+
+x-app: &app
+  build: .
+  image: jevtrade:latest
+  restart: unless-stopped
+  env_file:
+    - path: .env          # OPENROUTER_API_KEY, JEVTRADE_ALLOW_LIVE_MODEL (only for decision.model: jev)
+      required: false
+  volumes:
+    - jevdata:/app/data
+    - jevreports:/app/reports
+    - ./config:/app/config:ro   # edit config/default.yaml, then `docker compose restart`
+
+services:
+  paper:
+    <<: *app
+    command: ["python", "-m", "jevtrade.paper", "run"]
+    stop_grace_period: 60s      # lets an in-flight bar finish; an interrupted bar is redone on start
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  api:
+    <<: *app
+    command: ["python", "-m", "jevtrade.api", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  web:
+    build: ./web
+    image: jevtrade-web:latest
+    restart: unless-stopped
+    depends_on: [api]
+    ports:
+      - "127.0.0.1:8080:80"     # change to "8080:80" only behind a firewall or VPN; there is no login
+
+volumes:
+  jevdata:
+  jevreports:

@@ -29,6 +29,16 @@ trade, and when to exit. All risk limits live in code, never in prompts.
 | `src/jevtrade/api/` | Read-only FastAPI over the store and reports | ✅ stage 9 |
 | `web/` | React dashboard over the API | ✅ stage 10 |
 
+## Quick start (Docker)
+
+```bash
+cp .env.example .env              # optional; only needed for the Jev model
+docker compose up -d --build      # paper loop + read-only API + dashboard
+```
+
+Then open http://localhost:8080. See
+[Running on a fresh Linux VM](#running-on-a-fresh-linux-vm) for a server.
+
 ## Setup
 
 Requires Python 3.11 or newer.
@@ -365,6 +375,77 @@ API and refreshes every minute. It shows:
 
 It follows the OS light or dark setting and works down to phone width. Set
 `JEVTRADE_API` to point the dev server at an API elsewhere.
+
+## Running on a fresh Linux VM
+
+`docker compose` runs the three services together. Their data lives in
+Docker volumes, so it survives restarts, rebuilds and reboots.
+
+| Service | What it does |
+|---|---|
+| `paper` | `python -m jevtrade.paper run`: syncs public candles, processes each closed bar once, writes the daily report |
+| `api` | `python -m jevtrade.api`: read-only API, reachable only from the other containers |
+| `web` | nginx serving the dashboard and passing `GET /api/*` to `api`; published on `127.0.0.1:8080` |
+
+A 1 vCPU / 1 GB VM (any provider, Ubuntu 24.04 or Debian 12) is enough. The
+VM needs outbound HTTPS only. Open no inbound ports other than SSH.
+
+1. **Install Docker** (as a user with sudo):
+
+   ```bash
+   sudo apt-get update && sudo apt-get install -y git ca-certificates curl
+   curl -fsSL https://get.docker.com | sudo sh
+   sudo usermod -aG docker $USER && newgrp docker
+   ```
+
+2. **Get the code and configure it:**
+
+   ```bash
+   git clone https://github.com/JaeHyun-Cha-00/Jev_Crypto_Trading.git
+   cd Jev_Crypto_Trading
+   cp .env.example .env    # leave as is for the mock or baseline model
+   nano config/default.yaml   # optional: decision.model, symbols, paper.initial_equity
+   ```
+
+   To paper-trade with Jev, set `decision.model: jev`, and put
+   `OPENROUTER_API_KEY=...` and `JEVTRADE_ALLOW_LIVE_MODEL=1` in `.env`.
+   That costs one API call per symbol per hour.
+
+3. **Start everything:**
+
+   ```bash
+   docker compose up -d --build
+   docker compose ps                  # api should become "healthy"
+   docker compose logs -f paper       # first start backfills candles, then processes the latest bar
+   ```
+
+   `restart: unless-stopped` brings all three back after a crash or a
+   reboot. The paper loop resumes from its last committed bar and catches
+   up on anything it missed.
+
+4. **Open the dashboard from your laptop** through an SSH tunnel (the port
+   is bound to the VM's localhost and has no login):
+
+   ```bash
+   ssh -N -L 8080:localhost:8080 you@your-vm
+   # then browse to http://localhost:8080
+   ```
+
+Day to day:
+
+```bash
+docker compose exec paper python -m jevtrade.paper status   # account in the terminal
+docker compose exec paper python -m jevtrade.report --day 2026-10-04
+docker compose restart paper        # after editing config/default.yaml (mounted read-only)
+git pull && docker compose up -d --build   # update
+docker compose down                 # stop (data volumes are kept; `down -v` deletes them)
+```
+
+Back up the store with
+`docker compose exec paper python -c "import sqlite3; sqlite3.connect('data/jevtrade.sqlite').backup(sqlite3.connect('data/backup.sqlite'))"`
+followed by `docker compose cp paper:/app/data/backup.sqlite .`.
+`docker compose stop paper` is safe at any time: an interrupted bar is
+rolled back and redone on the next start.
 
 ## Evaluation validity
 
