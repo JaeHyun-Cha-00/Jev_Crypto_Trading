@@ -363,7 +363,7 @@ function JevView({ data }: { data: Data }) {
           {pol && (
             <dl className="kv">
               <dt>Buy when</dt><dd>p(up) ≥ {pol.entry_threshold} and p(up) − p(down) ≥ {pol.min_edge}</dd>
-              <dt>Sell when</dt><dd>p(down) ≥ {pol.exit_threshold}, the stop, or {pol.max_holding_bars ?? "no"} hours held</dd>
+              <dt>Sell when</dt><dd>p(down) ≥ {pol.exit_threshold} or the stop{pol.max_holding_bars != null ? `, or ${pol.max_holding_bars} hours held` : ""}</dd>
               <dt>Stop-loss</dt><dd>{fmtPct(pol.stop_loss_pct, false)}</dd>
               {config && (
                 <>

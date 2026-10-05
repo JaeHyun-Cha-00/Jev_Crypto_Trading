@@ -180,9 +180,10 @@ orders fill at the next bar's open.
   then `p(down) ≥ exit_threshold`. The first two don't depend on the model.
   `max_holding_bars` can differ per model through
   `max_holding_bars_by_model`; `null` turns the time exit off. The baseline
-  has it off, so it exits when the SMAs cross back (or on the stop).
+  has it off, so it exits when the SMAs cross back (or on the stop). Jev has
+  it off too, so it holds until `p(down) ≥ exit_threshold` or the stop.
 - **Re-entry:** after an exit, the same symbol can't enter again for
-  `min_trade_interval_bars` (4) bars.
+  `min_trade_interval_bars` bars (0 by default: it may re-enter right away).
 - **Stops** trigger on the bar's low, not its close. A stopped long fills
   inside that bar at the stop price, or at the bar's open if it gapped
   below the stop, less `stop_slippage_bps`. The backtest and paper loops
@@ -220,8 +221,8 @@ with `bar_open` and `bar_low`.
 - Every fill pays `fee_bps` on notional. Equity is cash plus positions marked
   at each close; positions still open at the end close at the last close.
 - `max_holding_bars` defaults to `decision.horizon_bars` (4), so a position is
-  held for the 4 hours the direction question asks about. The baseline
-  overrides it to no time limit and exits on its own signal.
+  held for the 4 hours the direction question asks about. The baseline and
+  Jev override it to no time limit and exit on their own signal.
 - Every decision is logged to `decisions` / `decision_answers` under the run
   id. `summary.json`, `summary.md`, `trades.csv` and `equity.csv` go to
   `backtest.output_dir/<run id>/`.

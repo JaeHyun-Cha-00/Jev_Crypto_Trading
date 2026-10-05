@@ -73,10 +73,11 @@ policy:                      # all risk limits live here, enforced in code
   max_daily_loss_pct: 0.03   # blocks new entries for the rest of the UTC day
   cooldown_after_losses: 3
   cooldown_bars: 24
-  min_trade_interval_bars: 4 # bars after an exit before the same symbol can re-enter
+  min_trade_interval_bars: 0 # bars after an exit before the same symbol can re-enter (0 = right away)
   # max_holding_bars defaults to decision.horizon_bars (4); set it here to override.
   max_holding_bars_by_model: # per decision model; null = no time exit
     baseline: null           # exits when the SMA crosses back (or on the stop)
+    jev: null                # holds until p(down) >= exit_threshold or the stop
 
 backtest:                    # python -m jevtrade.backtest
   initial_equity: 10000

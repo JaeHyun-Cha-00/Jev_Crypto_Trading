@@ -212,3 +212,10 @@ def test_max_holding_per_model():
     assert a.kind == "hold"
     a = p.evaluate(SYM, T0 + 100 * H, 100.0, dec(down=1.0), acct(positions={SYM: pos}, marks={SYM: 100.0}))
     assert a.kind == "exit" and a.reason.startswith("model_exit")
+
+
+def test_default_jev_holds_without_time_exit_and_reenters_right_away():
+    from jevtrade.config import load_config
+    pcfg = load_config().policy.for_model("jev")
+    assert pcfg.max_holding_bars is None
+    assert pcfg.min_trade_interval_bars == 0
