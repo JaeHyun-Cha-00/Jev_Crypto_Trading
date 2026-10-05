@@ -374,9 +374,35 @@ cd web && npm ci && npm run dev # terminal 2: http://localhost:5173 (proxies /ap
 npm run build                   # static files in web/dist, for any web server that proxies /api
 ```
 
-A single page (React + TypeScript, Vite, no chart library) that reads the
-API and refreshes every minute. It tracks only Jev: the mock/baseline paper
-loop and backtests are no longer shown. It shows:
+React + TypeScript (Vite; lightweight-charts for candles) with two views.
+
+**Market** (`#/`, the default) works like a broker app's coin list, for the
+coins in `data.symbols`:
+- Prices stream live from Coinbase's public websocket
+  (`wss://ws-feed.exchange.coinbase.com`, opened by your browser), with the
+  API's `/api/market/tickers` as the baseline every 15 seconds and the
+  fallback every 5 seconds if the socket is blocked ("Delayed prices").
+  Prices flash green or red as they tick.
+- BTC, ETH, SOL and XRP cards, market breadth (coins up vs down), top
+  gainers, top losers and most traded.
+- The full list: price, 24h change, 24h range, dollar volume, a 24-hour
+  sparkline and Jev's last call (p(up)/p(down)) or its holding. Search,
+  sort, and tabs for All, a ★ watchlist (kept in your browser) and the coins
+  Jev holds.
+- A page per coin (`#/coin/BTC-USD`): live price, bid/ask and 24h stats;
+  candles from 1 minute to 1 day with volume and Jev's paper buys and sells
+  marked, the last candle built live from trades; the order book with depth
+  and bid/ask balance; the live trade tape; and Jev's position (P&L at the
+  live price), last call and hourly calls on that coin with their results.
+
+The API's market routes (`/api/market/tickers|candles|book|trades`) read
+public Coinbase REST endpoints only, cache them for a few seconds and space
+calls under Coinbase's public limit (`market:` in `config/default.yaml`).
+No keys and no orders.
+
+**Jev portfolio** (`#/jev`) reads the API and refreshes every minute. It
+tracks only Jev: the mock/baseline paper loop and backtests are no longer
+shown. It shows:
 - Health from the forward log's last Jev call.
 - **Jev paper portfolio**: the policy and simulator replayed over the answers
   Jev already gave in the forward log (`/api/forward/paper`), with the equity

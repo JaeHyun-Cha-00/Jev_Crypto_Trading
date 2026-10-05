@@ -185,3 +185,72 @@ export async function get<T>(path: string, params: Record<string, string | numbe
   }
   return res.json() as Promise<T>;
 }
+
+// Live market (/api/market/*): public Coinbase data for the tracked coins.
+
+export interface CoinTicker {
+  symbol: string;
+  name: string;
+  price: number | null;
+  open_24h: number | null;
+  high_24h: number | null;
+  low_24h: number | null;
+  change_24h: number | null;
+  change_pct_24h: number | null;
+  /** base currency */
+  volume_24h: number | null;
+  volume_usd_24h: number | null;
+  volume_30d: number | null;
+  /** last 24 hours, 15-minute closes, oldest first; empty until the first refresh */
+  spark: number[];
+}
+
+export interface Tickers {
+  updated_at: number | null;
+  spark_updated_at: number | null;
+  error: string | null;
+  coins: CoinTicker[];
+}
+
+export interface Candle {
+  /** candle open, UTC ms */
+  ts: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface Book {
+  symbol: string;
+  bids: [number, number][];
+  asks: [number, number][];
+  mid: number | null;
+  spread: number | null;
+  spread_pct: number | null;
+}
+
+export interface Fill {
+  id: number | null;
+  time: string;
+  price: number;
+  size: number;
+  /** the taker's side */
+  side: "buy" | "sell";
+}
+
+export const TIMEFRAMES = [
+  { id: "1m", label: "1m", sec: 60 },
+  { id: "5m", label: "5m", sec: 300 },
+  { id: "15m", label: "15m", sec: 900 },
+  { id: "1h", label: "1H", sec: 3600 },
+  { id: "6h", label: "6H", sec: 21600 },
+  { id: "1d", label: "1D", sec: 86400 },
+] as const;
+export type Timeframe = (typeof TIMEFRAMES)[number]["id"];
+
+export const getTickers = () => get<Tickers>("/market/tickers");
+export const getCandles = (symbol: string, timeframe: Timeframe) => get<Candle[]>("/market/candles", { symbol, timeframe });
+export const getBook = (symbol: string, depth = 14) => get<Book>("/market/book", { symbol, depth });
+export const getFills = (symbol: string, limit = 40) => get<Fill[]>("/market/trades", { symbol, limit });
