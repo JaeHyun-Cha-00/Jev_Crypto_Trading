@@ -63,6 +63,8 @@ ignores), never from YAML.
 data:
   exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken
   symbols: [BTC/USD, ETH/USD, ...]  # 81 coins: Robinhood-tradable with a Coinbase USD market
+  symbols_live: true         # re-read that list from Robinhood and Coinbase each run; symbols is the fallback
+  exclude: [PAXG/USD]        # never tracked, even when listed
   timeframe: 1h
   start: "2025-01-01T00:00:00Z"   # earliest candle kept; backfilled on coinbase
   page_limit: 300            # candles per request, clamped per exchange
@@ -417,8 +419,14 @@ shown. It shows:
   the rest of `data.symbols` sit in a picker, so the page scales to many coins.
 - Buys, trades and PnL per coin, for coins Jev has bought.
 - The trading rules in force, including whether the skill gate lets Jev buy.
-- Jev's activity: its buys, its closed trades, and every hourly call with
-  p(up), p(down), the policy's action and reason, filterable by coin.
+- Jev's activity: **By hour** (the default) lists every hour since tracking
+  started, bought or not: the coins Jev picked (answers that met the buy
+  thresholds) with their p(up), what the account did with them (bought, held
+  back by the skill gate, no room, already held), and once the question's
+  horizon has closed the picks' average return before and after a round trip
+  of costs next to the average coin's. An hour the collector skipped shows as
+  not asked. The other tabs: its buys, its closed trades, and every hourly
+  call with p(up), p(down), the policy's action and reason. All filter by coin.
 - The Jev forward log (see below): how the hourly forward calls compare
   with what happened.
 
@@ -443,10 +451,16 @@ It follows the OS light or dark setting and works down to phone width. Set
 
 ### Forward data collection (GitHub Actions)
 
-`.github/workflows/collect.yml` runs at 11 minutes past every hour (and on
+`.github/workflows/collect.yml` runs at 1 minute past every hour (and on
 demand via **Run workflow**). Each run:
 
-- fetches recent public 1h candles for every configured symbol from Coinbase;
+- reads the coin list live (`data.symbols_live`): every Robinhood-tradable,
+  non-stablecoin coin with an online Coinbase USD market, less `data.exclude`,
+  falling back to `data.symbols` if either site can't be reached;
+- reads Robinhood's bid and ask for every coin in one public call and logs it
+  on the newest candle's line (`rh_bid`, `rh_ask`), so the dashboard's replay
+  pays the spread Robinhood really quoted;
+- fetches recent public 1h candles for every tracked symbol from Coinbase;
 - asks Jev (the pinned snapshot) the configured questions once for each closed
   candle that has no answer logged yet, looking back at most 24 candles, so a
   skipped or delayed run is backfilled and no candle is asked twice;
@@ -464,7 +478,7 @@ from the `OPENROUTER_API_KEY` repository secret (Settings → Secrets and
 variables → Actions); the run stops before any call if it is missing. Each
 call costs money: about $0.00008 at the recorded ~2,000 input tokens, so the
 default 81 coins hourly is roughly $0.16 a day (about $4.70 a month). Trim
-`data.symbols` to spend less. A coin whose candles can't be fetched is skipped
+`data.symbols` and turn `data.symbols_live` off to spend less. A coin whose candles can't be fetched is skipped
 for that run and retried the next hour; the other coins still run.
 
 Locally, against any directory:
@@ -474,7 +488,7 @@ python -m jevtrade.collect --out data-log --max-backfill 24
 ```
 
 GitHub can delay or skip scheduled runs. The `collect-kick` service in
-`docker-compose.yml` is a backstop: at 20 minutes past each hour it asks GitHub
+`docker-compose.yml` is a backstop: from 1 minute past each hour it asks GitHub
 whether a collect run started this hour and, if none did, starts one (the run
 still happens in GitHub Actions). It needs `GITHUB_TOKEN` with **Actions: read
 and write** on the repo, plus **Contents: read** for the dashboard; without a
@@ -525,8 +539,8 @@ instance hours a month, enough for one service around the clock, and needs no ca
 
 Because the page is on the public internet, it asks for `DASHBOARD_PASSWORD`
 (any user name). Only `/api/health` is open, for Render's health check. The
-same service runs the collect backstop (`JEVTRADE_KICK=1`, at :25, after the
-local `collect-kick` at :20, so both can run) and pings itself every 10
+same service runs the collect backstop (`JEVTRADE_KICK=1`, from :03, after the
+local `collect-kick` at :01, so both can run) and pings itself every 10
 minutes, because free services otherwise sleep after 15 idle minutes.
 
 1. Sign in at https://dashboard.render.com with GitHub and let Render see this repo.

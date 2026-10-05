@@ -17,6 +17,7 @@ import os
 import uvicorn
 
 from ..config import load_config
+from ..data.live import resolve_symbols
 from .app import create_app
 from .hosting import apply
 
@@ -29,6 +30,7 @@ def main() -> None:
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     cfg = load_config(args.config)
+    resolve_symbols(cfg.data)
     port = args.port or int(os.environ.get("PORT") or cfg.api.port)
     uvicorn.run(apply(create_app(cfg), cfg), host=args.host or cfg.api.host, port=port,
                 log_level="info")

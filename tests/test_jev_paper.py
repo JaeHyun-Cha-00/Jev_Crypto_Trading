@@ -187,6 +187,25 @@ def test_robinhood_spread_is_paid_on_both_sides_and_wider_for_thin_coins():
     assert r["spread_bps"] == {"min": 95, "max": 115}
 
 
+def test_logged_robinhood_quotes_replace_the_spread_estimate():
+    cfg = AppConfig()   # estimate would be 95-115bps
+    rows = [_ohlc(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), 100.0, 100.0, 100.0, 1e6)]
+    rows += [_ohlc(row("BTC/USD", i, 100.0), 100.0, 100.0, 100.0, 1e6) for i in range(1, 6)]
+    rows[0].update(rh_bid=99.5, rh_ask=100.5)   # 50bps per side, carried forward to later fills
+    rows[3].update(rh_bid=99.0, rh_ask=101.0)   # 100bps from hour 3 on
+    r = run(rows, cfg)
+    t = r["trades"][0]
+    assert t["entry_price"] == pytest.approx(100.5)
+    assert t["exit_price"] == pytest.approx(99.0)
+    assert r["spread_source"] == "robinhood" and r["quoted_symbols"] == 1
+    assert r["spread_bps"] == {"min": pytest.approx(100), "max": pytest.approx(100)}
+
+
+def test_without_quotes_the_estimate_is_reported():
+    r = run([row("BTC/USD", 0, 100.0)], AppConfig())
+    assert r["spread_source"] == "estimate" and r["quoted_symbols"] == 0
+
+
 def test_spread_scales_on_log_volume():
     c = JevPaperConfig()
     assert c.spread_for(5e6) == c.spread_for(5e9) == 95
@@ -258,3 +277,38 @@ def test_skill_gate_never_blocks_a_sale():
     [t] = r["trades"]
     assert t["exit_reason"].startswith("model_exit") and t["exit_ts"] == T0 + 10 * H
     assert r["gate"]["open"] is False
+
+
+def test_hours_show_each_hours_picks_what_the_account_did_and_how_they_did():
+    rows = [row("BTC/USD", 0, 100.0, up=0.7, down=0.0), row("SOL/USD", 0, 20.0, up=0.6, down=0.2)]
+    rows += [row("BTC/USD", i, 100.0 + i) for i in range(1, 6)]
+    rows += [row("SOL/USD", i, 20.0) for i in range(1, 6)]
+    rows += [row("ETH/USD", i, 50.0, status="error" if i == 0 else "answered") for i in range(6)]
+    r = run(rows)
+    assert [h["bar_ts"] for h in r["hours"]] == [T0 + i * H for i in range(5, -1, -1)]   # newest first
+    h = r["hours"][-1]
+    assert (h["asked"], h["answered"]) == (3, 2)
+    assert [p["symbol"] for p in h["picks"]] == ["BTC/USD", "SOL/USD"]   # highest p(up) first
+    btc, sol = h["picks"]
+    assert btc["action"] == "enter" and btc["why"] == "entry" and h["bought"] == ["BTC/USD", "SOL/USD"]
+    # Resolved at hour 4 (horizon 4): BTC rose 4%, SOL and ETH were flat.
+    assert btc["ret"] == pytest.approx(0.04) and btc["net"] == pytest.approx(0.04 - 2 * 12 / 10_000)
+    assert sol["ret"] == 0.0 and h["market"] == pytest.approx(0.04 / 3)
+    assert h["resolves_at"] == T0 + 4 * H
+    later = r["hours"][0]   # hour 5: no picks, horizon still open
+    assert later["picks"] == [] and later["market"] is None and later["bought"] == []
+
+
+def test_hours_list_picks_the_skill_gate_held_back():
+    rows = [row("BTC/USD", i, 100.0 + i, up=0.7, down=0.0) for i in range(8)]
+    r = run(rows, gated(24, 1000))
+    assert all(h["held_back"] == 1 and h["bought"] == [] for h in r["hours"])
+    [p] = r["hours"][0]["picks"]
+    assert (p["symbol"], p["action"], p["why"]) == ("BTC/USD", "skip", "skill_gate")
+
+
+def test_an_hour_the_collector_skipped_still_gets_a_row():
+    rows = [row("BTC/USD", i, 100.0) for i in (0, 1, 3)]
+    r = run(rows)
+    assert [(h["bar_ts"], h["asked"]) for h in r["hours"]] == [(T0 + 3 * H, 1), (T0 + 2 * H, 0), (T0 + H, 1), (T0, 1)]
+    assert r["hours"][1]["picks"] == [] and r["hours"][1]["market"] is None

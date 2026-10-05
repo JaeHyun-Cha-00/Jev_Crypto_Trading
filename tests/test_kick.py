@@ -31,8 +31,25 @@ def test_dispatches_when_no_run_started_this_hour():
 
 
 def test_skips_when_the_schedule_already_ran():
-    gh = FakeGitHub([{"id": 7, "event": "schedule", "status": "completed"}])
+    gh = FakeGitHub([{"id": 7, "event": "schedule", "status": "completed", "conclusion": "success"}])
     assert Kicker("o/r", "tok", http=gh).tick(NOW).startswith("skip")
+    assert [c[0] for c in gh.calls] == ["GET"]
+
+
+def test_waits_while_a_run_is_queued():
+    gh = FakeGitHub([{"id": 7, "event": "workflow_dispatch", "status": "queued"}])
+    assert Kicker("o/r", "tok", http=gh).tick(NOW).startswith("wait")
+    assert [c[0] for c in gh.calls] == ["GET"]
+
+
+def test_retries_once_after_a_cancelled_run_then_gives_up():
+    # 2026-10-05 19:25: a GitHub Actions outage left the run queued until it was cancelled
+    cancelled = {"id": 7, "event": "workflow_dispatch", "status": "completed", "conclusion": "cancelled"}
+    gh = FakeGitHub([cancelled])
+    assert Kicker("o/r", "tok", http=gh).tick(NOW).startswith("dispatched: retrying")
+    assert [c[0] for c in gh.calls] == ["GET", "POST"]
+    gh = FakeGitHub([dict(cancelled, id=8, conclusion="failure"), cancelled])
+    assert Kicker("o/r", "tok", http=gh).tick(NOW).startswith("give up")
     assert [c[0] for c in gh.calls] == ["GET"]
 
 
@@ -68,14 +85,14 @@ class Clock:
 
 
 class FakeKicker:
-    def __init__(self, fail=()):
-        self.ticks, self.fail = [], set(fail)
+    def __init__(self, fail=(), results=()):
+        self.ticks, self.fail, self.results = [], set(fail), list(results)
 
     def tick(self, now):
         self.ticks.append(now)
         if len(self.ticks) in self.fail:
             raise RuntimeError("HTTP 502")
-        return "dispatched"
+        return self.results.pop(0) if self.results else "skip: succeeded"
 
 
 def _run(clock, k, minute=20):
@@ -111,3 +128,10 @@ def test_a_failed_check_is_retried_at_the_next_wake_not_next_hour():
     clock, k = Clock(T(16, 19), T(16, 59)), FakeKicker(fail={1})
     _run(clock, k)
     assert [t.strftime("%H:%M") for t in k.ticks] == ["16:20", "16:25"]
+
+
+def test_loop_keeps_checking_until_the_hours_run_succeeds():
+    clock = Clock(T(19, 24), T(19, 59))
+    k = FakeKicker(results=["dispatched", "wait: queued", "dispatched: retrying", "wait", "skip: succeeded"])
+    _run(clock, k, minute=25)
+    assert [t.strftime("%H:%M") for t in k.ticks] == ["19:25", "19:30", "19:35", "19:40", "19:45"]

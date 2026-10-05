@@ -116,7 +116,6 @@ def default_questions(
 class JevConfig(BaseModel):
     """JevModel settings. The API key is read from the environment, never from YAML."""
 
-    provider: Literal["openrouter"] = "openrouter"
     base_url: str = "https://openrouter.ai/api/v1"
     # A dated snapshot, so answers (and tuned thresholds) cannot drift silently.
     model: str = "typesafe/jev-1.13-20260917"
