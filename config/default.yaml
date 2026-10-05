@@ -24,12 +24,21 @@ state:
   target_max_tokens: 2000
 
 decision:
-  model: mock                # mock | baseline | jev (jev not implemented yet)
+  model: mock                # mock | baseline | jev
   horizon_bars: 24
   flat_band_pct: 0.5
+  adverse_move_pct: 3.0      # matches policy.stop_loss_pct; see docs/jev_prompt.md
   mock_abstain_rate: 0.1
   baseline_fast: 20
   baseline_slow: 50
+  jev:                       # key comes from $OPENROUTER_API_KEY, never from YAML
+    provider: openrouter
+    base_url: https://openrouter.ai/api/v1
+    model: typesafe/jev-1.13-20260917   # pinned snapshot; aliases are rejected
+    api_key_env: OPENROUTER_API_KEY
+    timeout_s: 30
+    max_retries: 2
+    price_per_input_token_usd: 0.000000042   # $0.042 / Mtok input, output free
 
 policy:                      # all risk limits live here, enforced in code
   entry_threshold: 0.55      # min p(up) to open a long

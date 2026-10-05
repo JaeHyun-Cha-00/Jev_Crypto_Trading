@@ -118,14 +118,30 @@ byte-identical text. The state targets fewer than 2,000 estimated tokens (it
 drops the oldest bars to fit) and is rejected above 32K.
 
 **Decision models** (`decision/`) answer configured questions with a
-probability per option. The default question is `direction`: up, flat or down
-over `horizon_bars`, where "flat" means within ±`flat_band_pct`.
+probability per option. The four default questions are documented in
+[docs/jev_prompt.md](docs/jev_prompt.md). The policy uses `direction`: up, flat
+or down over `horizon_bars`, where "flat" means within ±`flat_band_pct`.
 - `MockModel` is deterministic: its output is a hash of the state, with an
   optional abstain rate or fixed outputs.
 - `BaselineModel` is an SMA crossover expressed through the same interface,
   so it goes through the same policy.
-- `JevModel` is **not implemented yet**. `decision.model: jev` raises an
-  error until the TypeSafe API docs can be read.
+- `JevModel` calls TypeSafe's Jev through OpenRouter's System One endpoint
+  (`POST https://openrouter.ai/api/v1/systemone`), asking all questions in one
+  request. The version is pinned to a dated snapshot in
+  `decision.jev.model` (aliases such as `-latest` are rejected), and a
+  response served by any other version abstains. Each call logs the pinned and
+  served version, latency, input tokens and estimated cost
+  (`input_tokens × price_per_input_token_usd`; OpenRouter's reported cost is
+  used when present). The key comes from `$OPENROUTER_API_KEY`. Transient
+  errors retry, then abstain; auth, billing and bad-request errors raise.
+  Unit tests replay recorded fixtures in `tests/fixtures/jev/`.
+
+  One live decision on the latest closed bar (prints the raw response,
+  latency, tokens and cost; `--record DIR` saves a new fixture):
+
+  ```bash
+  python -m jevtrade.decision --symbol BTC/USDT
+  ```
 
 The `decisions` table logs every call with the input hash, input text, model
 version, raw output, latency, input tokens, estimated cost, and the policy's
