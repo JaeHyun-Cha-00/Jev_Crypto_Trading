@@ -73,3 +73,14 @@ def test_load_returns_utc_index():
     assert str(df.index.tz) == "UTC"
     assert list(df.columns) == ["open", "high", "low", "close", "volume"]
     assert df.index[0].value // 1_000_000 == T0
+
+
+def test_sync_with_capped_history_source():
+    """Kraken-style source: only the latest N candles are served regardless of `since`."""
+    src = FakeSource(synthetic_candles(1000), max_history=720)
+    store = _store()
+    r = sync_symbol(src, store, EX, SYM, TF, H, T0, now_ms=T0 + 1000 * H, page_limit=720)
+    ts = store.timestamps(EX, SYM, TF)
+    assert len(ts) == 720 and ts[0] == T0 + 280 * H and ts[-1] == T0 + 999 * H
+    assert r.gaps == []
+    assert src.calls <= 3
