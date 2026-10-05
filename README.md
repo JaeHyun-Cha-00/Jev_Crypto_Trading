@@ -19,7 +19,7 @@ trade, and when to exit. All risk limits live in code, never in prompts.
 | Module | Purpose | Status |
 |---|---|---|
 | `src/jevtrade/data/` | Public OHLCV via ccxt → SQLite, incremental, gap detection, UTC | ✅ stage 1 |
-| `features/` | Closed-candle features, no look-ahead | planned |
+| `src/jevtrade/features/` | Closed-candle features, no look-ahead | ✅ stage 2 |
 | `state/` | Anonymized text market state for Jev | planned |
 | `decision/` | `DecisionModel`: Jev / Mock / Baseline | planned |
 | `policy/` | Probabilities → actions, risk limits | planned |
@@ -73,6 +73,24 @@ python -m jevtrade.data            # sync all configured symbols up to the last 
   and reported, never interpolated.
 - All timestamps are candle open times in UTC epoch milliseconds. DataFrames
   use a tz-aware UTC index.
+
+### 2. Features
+
+`jevtrade.features.compute.compute_features(candles_df)` returns, for each
+closed candle:
+
+| Feature | Definition |
+|---|---|
+| `ret_{1,4,24,72}` | log return over *w* bars |
+| `rvol_{24,72}` | std of 1-bar log returns over *w* bars |
+| `volume_z_24` | z-score of log volume against the trailing 24 bars |
+| `rsi_14` | Wilder RSI (recursive, causal) |
+| `dist_ma_{20,50,200}` | `close / SMA(w) - 1` |
+
+Rows without enough history (`max_lookback()` = 200 bars by default) contain
+NaN and are treated as "not ready", never filled. Look-ahead is tested two
+ways. First, features must not change when future candles are appended.
+Second, they must not change when future candles are perturbed.
 
 ## Evaluation validity
 
