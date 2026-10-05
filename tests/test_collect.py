@@ -256,3 +256,12 @@ def test_decision_cli_state_matches_the_collector(tmp_path):
     assert int(candles.index[-1].value // 1_000_000) == logged["candle_ts"]
     assert state.text == logged["state"]
     assert _pretty("<html>502</html>") == "<html>502</html>"   # error pages print as-is
+
+
+def test_each_run_writes_one_gzip_member(tmp_path):
+    import zlib
+    _collector(tmp_path, Transport(), max_backfill=1).run(_now(1200))   # one row per symbol
+    [p] = (tmp_path / "state").glob("*.jsonl.gz")
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    assert len(d.decompress(p.read_bytes()).splitlines()) == 2
+    assert d.eof and d.unused_data == b""   # nothing after the first member
