@@ -70,3 +70,17 @@ def test_no_threads_unless_asked(monkeypatch):
                                         "RENDER_EXTERNAL_URL": "https://x.onrender.com/"})
     assert [t.name for t in ts] == started == ["collect-kick", "keepalive"]
     assert ts[1]._args == ("https://x.onrender.com/api/health", 10.0)
+
+
+def test_installed_package_finds_config_in_working_dir(tmp_path, monkeypatch):
+    """A non-editable install (the Docker images) has no config next to the package."""
+    from jevtrade import config as c
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "default.yaml").write_text("data:\n  symbols: [SOL/USD]\n")
+    monkeypatch.setattr(c, "DEFAULT_CONFIG_PATH", tmp_path / "site-packages" / "default.yaml")
+    monkeypatch.delenv("JEVTRADE_CONFIG", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert c.load_config().data.symbols == ["SOL/USD"]
+    monkeypatch.setenv("JEVTRADE_CONFIG", str(tmp_path / "missing.yaml"))
+    with pytest.raises(FileNotFoundError):
+        c.load_config()
