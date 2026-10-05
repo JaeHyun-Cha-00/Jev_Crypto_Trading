@@ -157,7 +157,7 @@ or down over `horizon_bars`, where "flat" means within ±`flat_band_pct`.
   latency, tokens and cost; `--record DIR` saves a new fixture):
 
   ```bash
-  python -m jevtrade.decision --symbol BTC/USDT
+  python -m jevtrade.decision --symbol BTC/USD
   ```
 
 The `decisions` table logs every call with the input hash, input text, model
