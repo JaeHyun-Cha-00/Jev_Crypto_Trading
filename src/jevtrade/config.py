@@ -20,13 +20,17 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "default.
 
 
 class DataConfig(BaseModel):
-    exchange: str = "kraken"
-    symbols: list[str] = Field(default_factory=lambda: ["BTC/USDT", "ETH/USDT"])
+    # ccxt exchange id. coinbaseexchange is api.exchange.coinbase.com, which
+    # pages back through full hourly history; kraken serves only ~30 days.
+    exchange: str = "coinbaseexchange"
+    symbols: list[str] = Field(default_factory=lambda: ["BTC/USD", "ETH/USD"])
     timeframe: str = "1h"
-    # First candle to fetch on an empty store (ISO-8601, UTC).
-    start: str = "2024-01-01T00:00:00Z"
-    # Max candles per request; exchanges cap this (kraken: 720).
-    page_limit: int = 720
+    # Earliest candle to keep (ISO-8601, UTC). Deep-history exchanges backfill to it.
+    start: str = "2025-01-01T00:00:00Z"
+    # Max candles per request; clamped to the exchange cap (coinbase 300, kraken 720).
+    page_limit: int = 300
+    # Honour HTTPS_PROXY / REQUESTS_CA_BUNDLE env vars (ccxt ignores them by default).
+    requests_trust_env: bool = True
 
     @field_validator("symbols")
     @classmethod

@@ -39,3 +39,20 @@ class FakeSource:
 @pytest.fixture
 def candles_500():
     return synthetic_candles(500)
+
+
+class WindowedSource(FakeSource):
+    """Coinbase-style source: each request returns only candles inside the
+    window [since, since + (limit - 1) * tf], capped at `cap` candles. Full
+    history is reachable, and a window with no trades comes back empty."""
+
+    def __init__(self, candles, missing=None, cap: int = 300, tf_ms: int = H):
+        super().__init__(candles, missing)
+        self.cap = cap
+        self.tf_ms = tf_ms
+
+    def fetch_ohlcv(self, symbol, timeframe, since=None, limit=None):
+        self.calls += 1
+        n = min(limit or self.cap, self.cap)
+        end = since + (n - 1) * self.tf_ms
+        return [c for c in self.candles if since <= c[0] <= end and c[0] not in self.missing]

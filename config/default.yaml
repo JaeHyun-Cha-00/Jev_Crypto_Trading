@@ -2,11 +2,12 @@
 # variables (see .env.example).
 
 data:
-  exchange: kraken           # any ccxt exchange id with public OHLCV
-  symbols: [BTC/USDT, ETH/USDT]
+  exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken (latest 720 candles only)
+  symbols: [BTC/USD, ETH/USD] # both exist on kraken too
   timeframe: 1h
-  start: "2024-01-01T00:00:00Z"
-  page_limit: 720            # kraken returns at most the latest 720 candles
+  start: "2025-01-01T00:00:00Z" # backfilled on coinbase; kraken can't reach it
+  page_limit: 300            # clamped per exchange: coinbase 300, kraken 720
+  requests_trust_env: true   # use HTTPS_PROXY / REQUESTS_CA_BUNDLE from the environment
 
 storage:
   sqlite_path: data/jevtrade.sqlite
