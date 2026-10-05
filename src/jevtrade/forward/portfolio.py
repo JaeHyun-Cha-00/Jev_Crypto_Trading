@@ -1,7 +1,7 @@
 """Jev paper account replayed from the forward log.
 
 Runs the same policy and simulator as the backtest and paper loop over the
-answers Jev already gave in the hourly forward log (jevtrade.api.forward).
+answers Jev already gave in the hourly forward log (jevtrade.forward.log).
 It makes no model calls and no exchange calls: prices come from the log too.
 
 Orders fill when the collect run that logged the deciding row actually ran

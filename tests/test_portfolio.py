@@ -2,9 +2,9 @@
 
 import pytest
 
-from jevtrade.api.forward import join
-from jevtrade.api.jev_paper import replay
-from jevtrade.api.settings import JevPaperConfig
+from jevtrade.forward.log import join
+from jevtrade.forward.portfolio import replay
+from jevtrade.forward.settings import JevPaperConfig
 from jevtrade.config import AppConfig
 
 H = 3_600_000
@@ -163,7 +163,7 @@ def test_close_only_rows_still_open_at_the_previous_close():
 
 
 def test_a_late_fill_only_sees_part_of_the_hours_dip():
-    from jevtrade.api.jev_paper import Bar, _fill_bar
+    from jevtrade.forward.portfolio import Bar, _fill_bar
     bar = Bar(100.0, 110.0, 90.0, 100.0)
     rest = _fill_bar(bar, 0, int(0.75 * H), H)
     assert rest.open == 100.0 and rest.low == pytest.approx(97.5) and rest.high == pytest.approx(102.5)

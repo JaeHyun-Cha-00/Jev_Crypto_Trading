@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { get, getForwardRows, getForwardSummary, getJevPaper } from "./api";
-import type { Config, ForwardRow, ForwardSummary, JevPaper } from "./api";
-import { CoinPage } from "./CoinPage";
-import { EquityChart } from "./EquityChart";
-import { ForwardLog } from "./ForwardLog";
-import { TZ, TZ_NAME, ago, fmtMoney, fmtPct, fmtPrice, fmtTime } from "./format";
-import { useLiveMarket, useWatchlist } from "./live";
-import type { FeedStatus } from "./live";
-import { MarketView } from "./Market";
-import type { JevCoin } from "./Market";
-import { Coin, tone } from "./ui";
+import { get, getForwardRows, getForwardSummary, getJevPaper } from "./lib/api";
+import type { Config, ForwardRow, ForwardSummary, JevPaper } from "./lib/api";
+import { CoinPage } from "./pages/CoinPage";
+import { EquityChart } from "./components/EquityChart";
+import { ForwardLog } from "./pages/ForwardLog";
+import { TZ, TZ_NAME, ago, fmtMoney, fmtPct, fmtPrice, fmtTime } from "./lib/format";
+import { useLiveMarket, useWatchlist } from "./lib/live";
+import type { FeedStatus } from "./lib/live";
+import { MarketView } from "./pages/Market";
+import type { JevCoin } from "./pages/Market";
+import { Coin, tone } from "./components/ui";
 
 // Two views. Market: every tracked coin live from Coinbase, broker-app style, with
 // a page per coin. Jev: its hourly forward calls (collect workflow, data-log branch)

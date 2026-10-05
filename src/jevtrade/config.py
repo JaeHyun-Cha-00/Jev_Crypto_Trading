@@ -13,7 +13,9 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .api.settings import ApiConfig, ForwardLogConfig, JevPaperConfig, MarketConfig
+from .api.settings import ApiConfig
+from .data.market import MarketConfig
+from .forward.settings import ForwardLogConfig, JevPaperConfig
 from .backtest.engine import BacktestConfig
 from .decision.base import DecisionConfig
 from .features.compute import FeatureConfig

@@ -10,10 +10,10 @@ import {
   createSeriesMarkers,
 } from "lightweight-charts";
 import type { IChartApi, IPriceLine, ISeriesApi, ISeriesMarkersPluginApi, SeriesMarker, Time, UTCTimestamp } from "lightweight-charts";
-import { TIMEFRAMES, getCandles } from "./api";
-import type { Candle, Timeframe } from "./api";
-import { fmtCompact, fmtPrice, fmtTime } from "./format";
-import { feed, productId } from "./live";
+import { TIMEFRAMES, getCandles } from "../lib/api";
+import type { Candle, Timeframe } from "../lib/api";
+import { fmtCompact, fmtPrice, fmtTime } from "../lib/format";
+import { feed, productId } from "../lib/live";
 
 export interface ChartMark {
   /** UTC ms */

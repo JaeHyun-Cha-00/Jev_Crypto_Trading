@@ -21,7 +21,8 @@ from __future__ import annotations
 import json
 import logging
 
-from ..api.forward import HttpGet, _http_get, _redact
+from .. import net
+from ..net import HttpGet, redact
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ def _get_json(http_get: HttpGet, url: str):
     return json.loads(http_get(url, _HEADERS, TIMEOUT_S))
 
 
-def robinhood_pairs(http_get: HttpGet = _http_get) -> dict[str, dict]:
+def robinhood_pairs(http_get: HttpGet = net.get) -> dict[str, dict]:
     """Coin code -> {"id", "stablecoin"} for every pair Robinhood trades against USD."""
     out, url = {}, ROBINHOOD_PAIRS_URL
     while url:
@@ -52,7 +53,7 @@ def robinhood_pairs(http_get: HttpGet = _http_get) -> dict[str, dict]:
     return out
 
 
-def coinbase_usd_bases(http_get: HttpGet = _http_get) -> set[str]:
+def coinbase_usd_bases(http_get: HttpGet = net.get) -> set[str]:
     """Base currencies with an online, tradable USD market on Coinbase Exchange."""
     rows = _get_json(http_get, COINBASE_PRODUCTS_URL)
     out = {p["base_currency"] for p in rows if isinstance(p, dict) and p.get("quote_currency") == "USD"
@@ -62,7 +63,7 @@ def coinbase_usd_bases(http_get: HttpGet = _http_get) -> set[str]:
     return out
 
 
-def live_symbols(configured: list[str], exclude: list[str], http_get: HttpGet = _http_get) -> list[str]:
+def live_symbols(configured: list[str], exclude: list[str], http_get: HttpGet = net.get) -> list[str]:
     """Robinhood-tradable non-stablecoins with an online Coinbase USD market, less `exclude`."""
     rh = robinhood_pairs(http_get)
     cb = coinbase_usd_bases(http_get)
@@ -73,7 +74,7 @@ def live_symbols(configured: list[str], exclude: list[str], http_get: HttpGet = 
     return known + [f"{c}/USD" for c in new]
 
 
-def resolve_symbols(data_cfg, http_get: HttpGet = _http_get) -> list[str]:
+def resolve_symbols(data_cfg, http_get: HttpGet = net.get) -> list[str]:
     """Set `data_cfg.symbols` to the live list when `symbols_live` is on; keep it on any failure."""
     if not data_cfg.symbols_live:
         return data_cfg.symbols
@@ -84,7 +85,7 @@ def resolve_symbols(data_cfg, http_get: HttpGet = _http_get) -> list[str]:
         live = live_symbols(data_cfg.symbols, data_cfg.exclude, http_get)
     except Exception as e:  # noqa: BLE001 - any failure falls back to the configured list
         log.warning("live coin list unavailable (%s); using the %d coins in data.symbols",
-                    _redact(f"{type(e).__name__}: {e}")[:300], len(data_cfg.symbols))
+                    redact(f"{type(e).__name__}: {e}")[:300], len(data_cfg.symbols))
         return data_cfg.symbols
     added = [s for s in live if s not in data_cfg.symbols]
     dropped = [s for s in data_cfg.symbols if s not in live]
@@ -95,7 +96,7 @@ def resolve_symbols(data_cfg, http_get: HttpGet = _http_get) -> list[str]:
     return live
 
 
-def robinhood_quotes(symbols: list[str], http_get: HttpGet = _http_get) -> dict[str, dict]:
+def robinhood_quotes(symbols: list[str], http_get: HttpGet = net.get) -> dict[str, dict]:
     """Symbol -> {"bid", "ask"} from Robinhood's quotes right now, for the symbols it trades."""
     pairs = robinhood_pairs(http_get)
     ids = {pairs[s.split("/")[0]]["id"]: s for s in symbols if s.split("/")[0] in pairs}

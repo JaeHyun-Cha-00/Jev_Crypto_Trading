@@ -26,7 +26,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from ..api.forward import _redact, _ssl_context
+from ..net import redact, ssl_context
 from ..config import load_config
 
 log = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ Http = Callable[[str, str, dict, bytes | None], tuple[int, bytes]]
 def _http(method: str, url: str, headers: dict, body: bytes | None) -> tuple[int, bytes]:
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=20, context=_ssl_context()) as r:
+        with urllib.request.urlopen(req, timeout=20, context=ssl_context()) as r:
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
@@ -60,7 +60,7 @@ class Kicker:
                f"?created=%3E%3D{since.strftime('%Y-%m-%dT%H:%M:%SZ')}&per_page=5")
         status, body = self.http("GET", url, self.headers, None)
         if status != 200:
-            raise RuntimeError(f"listing runs: HTTP {status}: {_redact(body.decode(errors='replace'))[:200]}")
+            raise RuntimeError(f"listing runs: HTTP {status}: {redact(body.decode(errors='replace'))[:200]}")
         return json.loads(body).get("workflow_runs", [])
 
     def tick(self, now: datetime) -> str:
@@ -73,7 +73,7 @@ class Kicker:
         url = f"{_API}/repos/{self.repo}/actions/workflows/{WORKFLOW}/dispatches"
         status, body = self.http("POST", url, self.headers, json.dumps({"ref": self.ref}).encode())
         if status != 204:
-            raise RuntimeError(f"dispatch: HTTP {status}: {_redact(body.decode(errors='replace'))[:200]}")
+            raise RuntimeError(f"dispatch: HTTP {status}: {redact(body.decode(errors='replace'))[:200]}")
         return "dispatched: no collect run had started this hour"
 
 
