@@ -21,7 +21,9 @@ close), so their stops only see closes.
 
 Costs follow `jev_paper` in the config, Robinhood-like by default: no fee,
 and every fill pays a spread from the mid that is wider for coins with little
-Coinbase volume. Stops pay it too.
+Coinbase volume. Stops pay it too. A buy is also capped at `max_volume_frac`
+of the coin's median hourly dollar volume, so a thin coin gets a small
+position however confident Jev is.
 
 Within an hour, symbols are evaluated in `Simulator.symbols_by_priority`, the
 same order the backtest and paper loop use: held coins first, then by edge
@@ -116,16 +118,16 @@ def _bars(rows: list[dict], tf_ms: int) -> dict[str, dict[int, Bar]]:
     return out
 
 
-def _spreads(bars: dict[str, dict[int, Bar]], cfg) -> dict[str, dict[int, float]]:
-    """Per-side spread (bps) for each coin and hour, from its median hourly dollar volume so far."""
-    out: dict[str, dict[int, float]] = {}
+def _dollar_volumes(bars: dict[str, dict[int, Bar]], n: int) -> dict[str, dict[int, float | None]]:
+    """Median hourly dollar volume of each coin's last `n` logged hours, as of each hour."""
+    out: dict[str, dict[int, float | None]] = {}
     for sym, by_ts in bars.items():
-        out[sym], recent = {}, deque(maxlen=cfg.volume_bars)
+        out[sym], recent = {}, deque(maxlen=n)
         for ts in sorted(by_ts):
             b = by_ts[ts]
             if b.volume is not None:
                 recent.append(b.volume * b.close)
-            out[sym][ts] = cfg.spread_for(median(recent) if recent else None)
+            out[sym][ts] = median(recent) if recent else None
     return out
 
 
@@ -142,6 +144,7 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
     initial = paper.initial_equity
     base = {"initial_equity": initial, "fee_bps": paper.fee_bps, "slippage_bps": paper.slippage_bps,
             "spread_bps": {"min": paper.spread_bps, "max": paper.spread_bps + paper.thin_extra_bps},
+            "max_volume_frac": paper.max_volume_frac,
             "policy": {"entry_threshold": pcfg.entry_threshold, "min_edge": pcfg.min_edge,
                        "exit_threshold": pcfg.exit_threshold, "stop_loss_pct": pcfg.stop_loss_pct,
                        "max_holding_bars": pcfg.max_holding_bars}}
@@ -153,9 +156,17 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
                 "buys": [], "calls": 0, "counts": {}, "per_symbol": {}}
 
     decisions = {(r["symbol"], r["candle_ts"]): r for r in rows}
-    spreads = _spreads(bars, paper)
+    volumes = _dollar_volumes(bars, paper.volume_bars)
+
+    def volume(sym: str, ts: int) -> float | None:
+        return volumes.get(sym, {}).get(ts)
+
+    def max_notional(sym: str, ts: int) -> float:
+        v = volume(sym, ts)
+        return float("inf") if v is None or paper.max_volume_frac is None else v * paper.max_volume_frac
+
     sim = Simulator(pcfg, tf_ms, paper.fee_bps, paper.slippage_bps,
-                    spread_bps=lambda s, t: spreads.get(s, {}).get(t, paper.spread_for(None)))
+                    spread_bps=lambda s, t: paper.spread_for(volume(s, t)), max_notional=max_notional)
     st = SimState.new(initial, timeline[0])
     trades: list[Trade] = []
     curve, actions = [], []

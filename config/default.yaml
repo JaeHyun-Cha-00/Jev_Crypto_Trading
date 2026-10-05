@@ -114,6 +114,7 @@ jev_paper:                   # the dashboard's Jev portfolio, replayed from the 
   thin_extra_bps: 20         # added for thin coins: in full at 100x below ref_volume_usd (log scale)
   ref_volume_usd: 5000000    # hourly Coinbase dollar volume (median of the last 24 logged hours)
   volume_bars: 24
+  max_volume_frac: 0.01      # a buy is at most 1% of that hourly dollar volume; null = no cap
 
 report:                      # python -m jevtrade.report [--day YYYY-MM-DD]
   output_dir: reports/out    # <output_dir>/<run id>/<day>.md and .json (git-ignored)

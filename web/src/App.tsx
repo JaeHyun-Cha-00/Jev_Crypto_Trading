@@ -353,7 +353,7 @@ export default function App() {
           <EquityChart points={equity} initial={paper?.initial_equity ?? 10_000} />
           <p className="caveat small" role="note">
             <span aria-hidden="true">▲</span> Likely better than real trading. Prices are Coinbase hourly candles with an
-            estimated Robinhood spread, not real Robinhood quotes, and every order is assumed to fill in full. Hours logged before candle highs and lows were
+            estimated Robinhood spread, not real Robinhood quotes. Hours logged before candle highs and lows were
             recorded only check the{pol ? ` ${fmtPct(pol.stop_loss_pct, false)}` : ""} stop-loss on closes.
           </p>
           <p className="muted small">
@@ -409,6 +409,9 @@ export default function App() {
                 {config && (
                   <>
                     <dt>Position at stop</dt><dd>{fmtPct(Number(config.sizing.position_frac_at_stop), false)} of equity</dd>
+                    {paper.max_volume_frac != null && (
+                      <><dt>Thin coins</dt><dd>a buy is at most {fmtPct(paper.max_volume_frac, false)} of the coin's hourly dollar volume</dd></>
+                    )}
                     <dt>Max position / gross</dt><dd>{fmtPct(Number(config.sizing.max_position_frac), false)} / {fmtPct(Number(config.sizing.max_gross_exposure), false)}</dd>
                     <dt>Direction question</dt><dd>±{config.flat_band_pct}% over {config.horizon_bars} hours</dd>
                   </>

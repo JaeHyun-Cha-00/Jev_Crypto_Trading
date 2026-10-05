@@ -55,6 +55,9 @@ class JevPaperConfig(BaseModel):
     thin_extra_bps: float = Field(20.0, ge=0, lt=10_000)
     ref_volume_usd: float = Field(5_000_000, gt=0)
     volume_bars: int = Field(24, ge=1)
+    # A buy never exceeds this share of the coin's median hourly dollar volume;
+    # null = no cap. Hours with no volume logged are not capped.
+    max_volume_frac: float | None = Field(0.01, gt=0, le=1)
 
     def spread_for(self, dollar_volume: float | None) -> float:
         """Per-side spread in bps for a coin trading `dollar_volume` an hour; unknown pays the most."""
