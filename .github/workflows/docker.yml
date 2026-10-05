@@ -1,0 +1,43 @@
+name: docker
+
+# Split from tests.yml so the image builds run only when a file they depend on
+# changes (see the minutes note there).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/Dockerfile*"
+      - "docker-compose.yml"
+      - "render.yaml"
+      - "pyproject.toml"
+      - "web/package*.json"
+      - "web/nginx.conf"
+      - ".github/workflows/docker.yml"
+  pull_request:
+    paths:
+      - "**/Dockerfile*"
+      - "docker-compose.yml"
+      - "render.yaml"
+      - "pyproject.toml"
+      - "web/package*.json"
+      - "web/nginx.conf"
+      - ".github/workflows/docker.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose file
+        run: docker compose config --quiet
+      - name: Build images
+        run: docker compose build
+      - name: Build the hosted image (render.yaml)
+        run: docker build -f Dockerfile.hosted -t jevtrade-hosted .
