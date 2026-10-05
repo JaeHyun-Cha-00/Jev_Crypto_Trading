@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 
 _API = "https://api.github.com"
 WORKFLOW = "collect.yml"
+MAX_RUNS = 2   # per hour: the first run plus one retry
 
 # (method, url, headers, body) -> (status, body)
 Http = Callable[[str, str, dict, bytes | None], tuple[int, bytes]]
@@ -64,16 +65,30 @@ class Kicker:
         return json.loads(body).get("workflow_runs", [])
 
     def tick(self, now: datetime) -> str:
-        """Start a collect run unless one already started this hour. Returns what happened."""
+        """Make sure a collect run succeeds this hour. Returns what happened, prefixed:
+
+        - "skip": a run this hour succeeded; nothing more to do this hour.
+        - "wait": a run this hour is queued or running; check again later.
+        - "dispatched": no run yet, or every run so far failed or was cancelled
+          (a GitHub outage can leave a run queued until it is cancelled).
+        - "give up": MAX_RUNS runs this hour all failed; leave it to next hour,
+          whose run backfills the missed candles anyway.
+        """
         hour = now.replace(minute=0, second=0, microsecond=0)
         runs = self._runs_since(hour)
-        if runs:
-            r = runs[0]
-            return f"skip: run {r.get('id')} ({r.get('event')}, {r.get('status')}) started this hour"
+        for r in runs:
+            if r.get("status") != "completed":
+                return f"wait: run {r.get('id')} ({r.get('event')}) is {r.get('status')}"
+            if r.get("conclusion") == "success":
+                return f"skip: run {r.get('id')} ({r.get('event')}) succeeded this hour"
+        if len(runs) >= MAX_RUNS:
+            return f"give up: {len(runs)} collect runs failed this hour"
         url = f"{_API}/repos/{self.repo}/actions/workflows/{WORKFLOW}/dispatches"
         status, body = self.http("POST", url, self.headers, json.dumps({"ref": self.ref}).encode())
         if status != 204:
             raise RuntimeError(f"dispatch: HTTP {status}: {_redact(body.decode(errors='replace'))[:200]}")
+        if runs:
+            return f"dispatched: retrying after run {runs[0].get('id')} ended {runs[0].get('conclusion')}"
         return "dispatched: no collect run had started this hour"
 
 
@@ -103,13 +118,14 @@ def main() -> None:
 def run(k: Kicker, minute: int = 1, once: bool = False, poll_min: float = 5,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         sleep: Callable[[float], None] = time.sleep) -> None:
-    """From `minute` past every hour on, make sure a collect run started that hour
+    """From `minute` past every hour on, make sure a collect run succeeded that hour
     (or check once, now, with `once`).
 
     Wakes every `poll_min` minutes and reads the wall clock each time, so a box
     that was asleep, or a container restarted after `minute`, still covers the
-    hour instead of waiting for the next one. An hour is done after one
-    successful check; errors are logged and retried at the next wake."""
+    hour instead of waiting for the next one. An hour is done once a run
+    succeeded or MAX_RUNS failed (see Kicker.tick); while a run is queued or
+    running, and after an error, the next wake checks again."""
     if once:
         try:
             log.info("%s", k.tick(clock()))
@@ -123,8 +139,10 @@ def run(k: Kicker, minute: int = 1, once: bool = False, poll_min: float = 5,
         hour = now.replace(minute=0, second=0, microsecond=0)
         if hour != done and now.minute >= minute:
             try:
-                log.info("%s", k.tick(now))
-                done = hour
+                what = k.tick(now)
+                log.info("%s", what)
+                if what.startswith(("skip", "give up")):
+                    done = hour
             except Exception as e:  # noqa: BLE001 - keep the loop alive; the next wake tries again
                 log.warning("kick failed: %s", e)
         now = clock()

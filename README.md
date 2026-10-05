@@ -63,6 +63,8 @@ ignores), never from YAML.
 data:
   exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken
   symbols: [BTC/USD, ETH/USD, ...]  # 81 coins: Robinhood-tradable with a Coinbase USD market
+  symbols_live: true         # re-read that list from Robinhood and Coinbase each run; symbols is the fallback
+  exclude: [PAXG/USD]        # never tracked, even when listed
   timeframe: 1h
   start: "2025-01-01T00:00:00Z"   # earliest candle kept; backfilled on coinbase
   page_limit: 300            # candles per request, clamped per exchange
@@ -446,7 +448,13 @@ It follows the OS light or dark setting and works down to phone width. Set
 `.github/workflows/collect.yml` runs at 1 minute past every hour (and on
 demand via **Run workflow**). Each run:
 
-- fetches recent public 1h candles for every configured symbol from Coinbase;
+- reads the coin list live (`data.symbols_live`): every Robinhood-tradable,
+  non-stablecoin coin with an online Coinbase USD market, less `data.exclude`,
+  falling back to `data.symbols` if either site can't be reached;
+- reads Robinhood's bid and ask for every coin in one public call and logs it
+  on the newest candle's line (`rh_bid`, `rh_ask`), so the dashboard's replay
+  pays the spread Robinhood really quoted;
+- fetches recent public 1h candles for every tracked symbol from Coinbase;
 - asks Jev (the pinned snapshot) the configured questions once for each closed
   candle that has no answer logged yet, looking back at most 24 candles, so a
   skipped or delayed run is backfilled and no candle is asked twice;
@@ -464,7 +472,7 @@ from the `OPENROUTER_API_KEY` repository secret (Settings → Secrets and
 variables → Actions); the run stops before any call if it is missing. Each
 call costs money: about $0.00008 at the recorded ~2,000 input tokens, so the
 default 81 coins hourly is roughly $0.16 a day (about $4.70 a month). Trim
-`data.symbols` to spend less. A coin whose candles can't be fetched is skipped
+`data.symbols` and turn `data.symbols_live` off to spend less. A coin whose candles can't be fetched is skipped
 for that run and retried the next hour; the other coins still run.
 
 Locally, against any directory:

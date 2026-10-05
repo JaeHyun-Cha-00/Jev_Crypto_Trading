@@ -4,10 +4,15 @@
 data:
   exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken (latest 720 candles only)
   # Every coin Robinhood lists as tradable that also has an active Coinbase
-  # USD market (checked 2026-10-05), stablecoins and PAXG (gold) left out.
-  # Oldest listings first, so a pass that runs out of time has done the majors.
+  # USD market, stablecoins and PAXG (gold) left out. symbols_live re-reads
+  # both lists at the start of every collect run and dashboard start, so new
+  # listings join and delistings drop on their own; the list below is the
+  # fallback when either site can't be reached, and sets the order (oldest
+  # listings first, so a pass that runs out of time has done the majors).
   # The hourly collect workflow asks Jev once per coin per closed candle:
   # about $0.00008 per call, so 81 coins x 24 calls = ~$0.16 per day.
+  symbols_live: true
+  exclude: [PAXG/USD]
   symbols: [
     BTC/USD, ETH/USD, BCH/USD, DOGE/USD, ETC/USD, LTC/USD, XRP/USD, ZEC/USD,
     XLM/USD, BNB/USD, ADA/USD, SOL/USD, AVAX/USD, DOT/USD, SHIB/USD, ATOM/USD,
@@ -81,7 +86,7 @@ policy:                      # all risk limits live here, enforced in code
   cooldown_after_losses: 3
   cooldown_bars: 24
   min_trade_interval_bars: 0 # bars after an exit before the same symbol can re-enter (0 = right away)
-  # max_holding_bars defaults to decision.horizon_bars (4); set it here to override.
+  # max_holding_bars defaults to decision.horizon_bars (24); set it here to override.
   max_holding_bars_by_model: # per decision model; null = no time exit
     baseline: null           # exits when the SMA crosses back (or on the stop)
     jev: null                # holds until p(down) >= exit_threshold or the stop
@@ -112,13 +117,15 @@ paper:                       # python -m jevtrade.paper run   (simulated fills o
 jev_paper:                   # the dashboard's Jev portfolio, replayed from the forward log
   initial_equity: 10000
   # Robinhood-like costs. Robinhood charges no commission on crypto; you pay
-  # its quote spread. Robinhood quotes for all 81 coins on 2026-10-05 07:05 UTC
-  # had bid and ask about 0.95% either side of the mid on BTC and ETH and up
-  # to about 1.15% on the thinnest coins, so a round trip costs ~1.9-2.3%.
+  # its quote spread. The replay uses the bid and ask the collect run logged
+  # from Robinhood each hour; spread_bps and thin_extra_bps below are only the
+  # fallback for a coin with no quote logged yet. They match Robinhood's quotes
+  # on 2026-10-05 (about 0.95% either side of the mid on BTC and ETH, up to
+  # about 1.15% on the thinnest coins, so a round trip costs ~1.9-2.3%).
   # For an exchange with fees instead: fee_bps = its taker fee, spread_bps ~ 1-5.
   fee_bps: 0                 # per side, on notional
   slippage_bps: 0            # beyond the quoted spread
-  spread_bps: 95             # per side from the mid, deep markets (BTC, ETH)
+  spread_bps: 95             # fallback: per side from the mid, deep markets (BTC, ETH)
   thin_extra_bps: 20         # added for thin coins: in full at 100x below ref_volume_usd (log scale)
   ref_volume_usd: 5000000    # hourly Coinbase dollar volume (median of the last 24 logged hours)
   volume_bars: 24
