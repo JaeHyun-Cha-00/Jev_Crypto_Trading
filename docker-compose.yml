@@ -6,8 +6,9 @@
 # reaching it from your laptop over SSH). Paper trading only: nothing here
 # places real orders.
 
+# paper and api share one image. Only paper builds it: two services building
+# the same tag at once makes `up --build` fail on a clean machine.
 x-app: &app
-  build: .
   image: jevtrade:latest
   restart: unless-stopped
   env_file:
@@ -21,6 +22,7 @@ x-app: &app
 services:
   paper:
     <<: *app
+    build: .
     command: ["python", "-m", "jevtrade.paper", "run"]
     stop_grace_period: 60s      # lets an in-flight bar finish; an interrupted bar is redone on start
     logging:
@@ -29,6 +31,7 @@ services:
 
   api:
     <<: *app
+    pull_policy: never          # built by the paper service, never pulled from a registry
     # Reads the forward log from GitHub over HTTPS (forward_log in config/default.yaml);
     # the default bridge network allows that outbound. Nothing else leaves the box.
     command: ["python", "-m", "jevtrade.api", "--host", "0.0.0.0", "--port", "8000"]
