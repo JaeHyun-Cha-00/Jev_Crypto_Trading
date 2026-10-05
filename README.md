@@ -428,7 +428,7 @@ every logged answer that met the buy thresholds, bought or not; it resolves
 `decision.horizon_bars` later. New buys are allowed while the signals of the
 last 7 days that have resolved averaged a positive return after a round trip
 of costs **and** beat the average logged coin over the same hours (so a
-market-wide rally alone doesn't count), with at least 1000 resolved. Held
+market-wide rally alone doesn't count), with at least 500 resolved. Held
 coins still sell on Jev's answer and the stop. Blocked buys show a
 `skill_gate:` reason.
 
