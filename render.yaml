@@ -1,0 +1,25 @@
+# Render Blueprint: the dashboard as one free web service at
+# https://<name>.onrender.com. Setup steps are in README ("Live website").
+services:
+  - type: web
+    name: jev-dashboard
+    runtime: docker
+    dockerfilePath: ./Dockerfile.hosted
+    plan: free
+    region: oregon
+    branch: main
+    autoDeploy: true            # redeploys on every merge to main
+    buildFilter:                # skip builds for docs/tests-only merges (500 free build minutes a month)
+      paths: [src/**, web/**, config/**, pyproject.toml, Dockerfile.hosted]
+    healthCheckPath: /api/health
+    envVars:
+      - key: DASHBOARD_PASSWORD  # the browser asks for it; any user name works
+        sync: false
+      - key: GITHUB_TOKEN        # Contents: read, Actions: read and write (same token as .env)
+        sync: false
+      - key: JEVTRADE_KICK       # start the hourly collect run if GitHub skipped it
+        value: "1"
+      - key: JEVTRADE_KICK_MINUTE
+        value: "25"              # after the local collect-kick (:20), so the two never both dispatch
+      - key: JEVTRADE_KEEPALIVE_MIN
+        value: "10"              # free services sleep after 15 idle minutes; this keeps the kick running
