@@ -4,7 +4,7 @@ import re
 import pandas as pd
 import pytest
 
-from jevtrade.features.compute import compute_features
+from jevtrade.features.compute import FeatureConfig, compute_features
 from jevtrade.state.builder import StateConfig, build_state
 
 from conftest import H, synthetic_candles
@@ -63,3 +63,18 @@ def test_state_uses_only_past_data():
     b_feats = compute_features(full).iloc[:300]
     b = build_state(full.iloc[:300], b_feats, 24, "1h")
     assert a.text == b.text
+
+
+def test_state_volume_z_follows_feature_config():
+    """Per-bar volume_z must use features.volume_z_window, not a fixed 24."""
+    df = _df()
+    fcfg = FeatureConfig(volume_z_window=12)
+    feats = compute_features(df, fcfg)
+    s = build_state(df, feats, 24, "1h", feature_cfg=fcfg)
+    recent = json.loads(s.text)["recent_bars_oldest_first"]
+    expected = feats["volume_z_12"].iloc[-len(recent):].round(1).tolist()
+    assert [b["volume_z"] for b in recent] == expected
+    assert "trailing 12 bars" in s.text
+
+    default = build_state(df, feats, 24, "1h")
+    assert [b["volume_z"] for b in json.loads(default.text)["recent_bars_oldest_first"]] != expected
