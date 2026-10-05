@@ -56,3 +56,11 @@ class WindowedSource(FakeSource):
         n = min(limit or self.cap, self.cap)
         end = since + (n - 1) * self.tf_ms
         return [c for c in self.candles if since <= c[0] <= end and c[0] not in self.missing]
+
+
+@pytest.fixture(autouse=True)
+def _no_github(monkeypatch):
+    """The forward-log loader must never reach the network in tests."""
+    def refuse(url, headers, timeout_s):
+        raise OSError(f"network disabled in tests: {url}")
+    monkeypatch.setattr("jevtrade.api.forward._http_get", refuse)

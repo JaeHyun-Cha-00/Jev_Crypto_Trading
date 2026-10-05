@@ -109,3 +109,93 @@ def test_missing_database_is_503(tmp_path):
     assert c.get("/api/health").json()["status"] == "no_database"
     assert c.get("/api/paper/status").status_code == 503
     assert not (tmp_path / "none.sqlite").exists()
+
+
+def test_forward_routes_with_github_mocked(env, monkeypatch):
+    from jevtrade.api.forward import ForwardLog
+    from jevtrade.api.settings import ForwardLogConfig
+    from test_forward import FakeGitHub
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    cfg, _ = env
+    gh = FakeGitHub()
+    fwd = ForwardLog(ForwardLogConfig(source="github", repo="me/repo"), http_get=gh)
+    c = TestClient(create_app(cfg, forward_log=fwd))
+    s = c.get("/api/forward/summary").json()
+    assert s["error"] is None and s["source"] == "github"
+    assert s["overall"]["scored"] == 4 and s["overall"]["hit_rate"] == 0.5
+    assert s["per_symbol"]["BTC/USD"]["pending"] == 1
+    rows = c.get("/api/forward/rows").json()
+    assert len(rows) == 7 and rows[0]["outcome"] is None
+    assert not any("state" in r or "raw_response" in r for r in rows)
+    eth = c.get("/api/forward/rows", params={"symbol": "ETH/USD", "limit": 2}).json()
+    assert len(eth) == 2 and {r["symbol"] for r in eth} == {"ETH/USD"}
+    assert c.get("/api/forward/rows", params={"limit": 0}).status_code == 422
+    assert c.post("/api/forward/summary").status_code == 405
+
+
+def test_forward_unreachable_is_empty_not_500(env):
+    cfg, c = env   # default config: source github, network refused by conftest
+    s = c.get("/api/forward/summary")
+    assert s.status_code == 200
+    body = s.json()
+    assert body["overall"]["decisions"] == 0 and body["overall"]["hit_rate"] is None
+    assert "network disabled" in body["error"]
+    assert c.get("/api/forward/rows").json() == []
+
+
+def test_forward_off(env):
+    cfg, _ = env
+    off = cfg.model_copy(deep=True)
+    off.forward_log.source = "off"
+    s = TestClient(create_app(off)).get("/api/forward/summary").json()
+    assert s["source"] == "off" and s["error"] is None and s["overall"]["scored"] == 0
+
+
+def test_forward_paper_replays_logged_answers(env):
+    from jevtrade.api.forward import ForwardLog
+    from jevtrade.api.settings import ForwardLogConfig
+    from test_forward import FakeGitHub
+
+    cfg, _ = env
+    fwd = ForwardLog(ForwardLogConfig(source="github", repo="me/repo"), http_get=FakeGitHub())
+    c = TestClient(create_app(cfg, forward_log=fwd))
+    r = c.get("/api/forward/paper").json()
+    assert r["initial_equity"] == cfg.paper.initial_equity and r["last_bar_ts"] is not None
+    assert {a["symbol"] for a in r["actions"]} <= {"BTC/USD", "ETH/USD"}
+    assert len(c.get("/api/forward/paper", params={"actions": 1}).json()["actions"]) == 1
+    assert c.post("/api/forward/paper").status_code == 405
+
+
+def test_forward_starts_at_start(env):
+    from datetime import datetime, timezone
+
+    from jevtrade.api.forward import ForwardLog
+    from jevtrade.api.settings import ForwardLogConfig
+    from test_forward import FakeGitHub
+
+    cfg, _ = env
+    first = 1791086400000   # first fixture candle, 2026-10-04T04:00Z
+    for start_ms, expect_rows in ((first + 3_600_000, True), (first + 30 * 86_400_000, False)):
+        c2 = cfg.model_copy(deep=True)
+        c2.forward_log.start = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
+        fwd = ForwardLog(ForwardLogConfig(source="github", repo="me/repo"), http_get=FakeGitHub())
+        r = TestClient(create_app(c2, forward_log=fwd)).get("/api/forward/paper").json()
+        assert r["tracking_since"] == start_ms
+        assert all(a["bar_ts"] >= start_ms for a in r["actions"])
+        assert bool(r["actions"]) is expect_rows
+        if not expect_rows:   # nothing logged since the start yet: a fresh account
+            assert r["equity"] == cfg.paper.initial_equity and r["trades"] == [] and r["curve"] == []
+        # The loader drops lines before the start too, so the stats match.
+        fwd2 = ForwardLog(ForwardLogConfig(source="github", repo="me/repo", start=c2.forward_log.start),
+                          http_get=FakeGitHub())
+        s = TestClient(create_app(c2, forward_log=fwd2)).get("/api/forward/summary").json()
+        assert s["overall"]["decisions"] == (5 if expect_rows else 0)   # two of the seven are in the first hour
+
+
+def test_start_reads_naive_and_zoned_times():
+    from jevtrade.api.settings import ForwardLogConfig
+
+    assert ForwardLogConfig().start_ms() is None
+    z = ForwardLogConfig(start="2026-10-05T07:00:00Z").start_ms()
+    assert z == ForwardLogConfig(start="2026-10-05T07:00:00").start_ms() == 1791183600000

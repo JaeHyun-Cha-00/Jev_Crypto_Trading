@@ -7,10 +7,11 @@ exchange: fills are computed from candles.
 Per bar t, in order:
 1. `begin_bar`: roll the daily-loss baseline (equity at the previous close).
 2. `fill_pending`: orders decided at the close of t-1 fill at t's open, with
-   `slippage_bps` against the trader and `fee_bps` on notional.
-3. `on_close`, per symbol: mark to the close, run `Policy.evaluate`, fill a
-   stop inside the bar at `action.fill_price`, queue entries and other exits
-   for the next open.
+   `slippage_bps` (plus the optional per-symbol `spread_bps`) against the
+   trader and `fee_bps` on notional.
+3. `on_close`, per symbol in `symbols_by_priority`: mark to the close, run
+   `Policy.evaluate`, fill a stop inside the bar at `action.fill_price`,
+   queue entries and other exits for the next open.
 
 `SimState` round-trips through JSON so the paper loop can persist it.
 """
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
+from typing import Callable
 
 import pandas as pd
 
@@ -95,12 +97,21 @@ class SimState:
 
 
 class Simulator:
-    def __init__(self, policy_cfg: PolicyConfig, tf_ms: int, fee_bps: float, slippage_bps: float):
+    def __init__(self, policy_cfg: PolicyConfig, tf_ms: int, fee_bps: float, slippage_bps: float,
+                 spread_bps: Callable[[str, int], float] | None = None,
+                 max_notional: Callable[[str, int], float] | None = None):
         self.pcfg = policy_cfg
         self.policy = Policy(policy_cfg, tf_ms)
         self.tf_ms = tf_ms
         self.fee_bps = fee_bps
         self.slippage_bps = slippage_bps
+        # Per-side spread from the mid for (symbol, bar_ts), on every fill; None = no spread.
+        self.spread_bps = spread_bps
+        # Largest entry notional the market can absorb for (symbol, bar_ts); None = no cap.
+        self.max_notional = max_notional
+
+    def _spread(self, sym: str, ts: int) -> float:
+        return self.spread_bps(sym, ts) if self.spread_bps is not None else 0.0
 
     def _fee(self, notional: float) -> float:
         return abs(notional) * self.fee_bps / 10_000
@@ -131,11 +142,13 @@ class Simulator:
                 continue
             p = st.pending.pop(sym)
             if p.action.kind == "exit" and sym in st.open:
-                px = bar.open * (1 - self.slippage_bps / 10_000)
+                px = bar.open * (1 - (self.slippage_bps + self._spread(sym, ts)) / 10_000)
                 trades.append(self.close_position(st, sym, ts, px, p.action.reason, at_open=True))
             elif p.action.kind == "enter" and sym not in st.open:
-                px = bar.open * (1 + self.slippage_bps / 10_000)
+                px = bar.open * (1 + (self.slippage_bps + self._spread(sym, ts)) / 10_000)
                 qty = p.action.size_frac * st.equity() / px
+                if self.max_notional is not None:
+                    qty = min(qty, self.max_notional(sym, ts) / px)
                 fee = self._fee(qty * px)
                 if qty * px + fee > st.cash:  # never borrow; long-only spot
                     qty = max(0.0, (st.cash - fee) / px)
@@ -147,6 +160,24 @@ class Simulator:
                 st.open[sym] = OpenPosition(Position(sym, qty, px, ts, stop), fee, p.action.reason)
                 st.marks[sym] = float(bar.open)
         return trades
+
+    def symbols_by_priority(self, st: SimState, decisions: dict[str, Decision | None]) -> list[str]:
+        """The order to call `on_close` in for one bar's symbols.
+
+        Held symbols go first, so a stop or exit frees room before any entry
+        is sized. Flat symbols follow by edge (p_up - p_down), highest first,
+        so when the exposure caps leave room for only a few entries the slots
+        go to the strongest signals, not to whichever coin is listed first.
+        Ties, abstains and missing decisions fall back to symbol order.
+        """
+        c = self.pcfg
+
+        def edge(d: Decision | None) -> float:
+            if d is None or d.abstain:
+                return float("-inf")
+            return d.p(c.question, c.up_option) - d.p(c.question, c.down_option)
+
+        return sorted(decisions, key=lambda s: (s not in st.open, -edge(decisions[s]), s))
 
     def mark(self, st: SimState, sym: str, bar: pd.Series) -> None:
         st.marks[sym] = float(bar.close)
@@ -169,7 +200,8 @@ class Simulator:
         trade = None
         if action.kind == "exit" and action.fill_price is not None:
             # Stop: fills inside this bar at the policy's price, not at the next open.
-            trade = self.close_position(st, sym, ts, action.fill_price, action.reason, at_open=False)
+            px = action.fill_price * (1 - self._spread(sym, ts) / 10_000)
+            trade = self.close_position(st, sym, ts, px, action.reason, at_open=False)
         elif action.kind in ("enter", "exit"):
             st.pending[sym] = PendingOrder(action, float(bar.close))
         return action, trade

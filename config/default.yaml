@@ -3,7 +3,24 @@
 
 data:
   exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken (latest 720 candles only)
-  symbols: [BTC/USD, ETH/USD] # both exist on kraken too
+  # Every coin Robinhood lists as tradable that also has an active Coinbase
+  # USD market (checked 2026-10-05), stablecoins and PAXG (gold) left out.
+  # Oldest listings first, so a pass that runs out of time has done the majors.
+  # The hourly collect workflow asks Jev once per coin per closed candle:
+  # about $0.00008 per call, so 81 coins x 24 calls = ~$0.16 per day.
+  symbols: [
+    BTC/USD, ETH/USD, BCH/USD, DOGE/USD, ETC/USD, LTC/USD, XRP/USD, ZEC/USD,
+    XLM/USD, BNB/USD, ADA/USD, SOL/USD, AVAX/USD, DOT/USD, SHIB/USD, ATOM/USD,
+    NEAR/USD, COMP/USD, LINK/USD, UNI/USD, ALGO/USD, HBAR/USD, BAT/USD,
+    ZRX/USD, CRV/USD, GRT/USD, AAVE/USD, XTZ/USD, AXS/USD, PEPE/USD, ZRO/USD,
+    RENDER/USD, WIF/USD, ARB/USD, OP/USD, BONK/USD, TRUMP/USD, ONDO/USD,
+    FET/USD, ENA/USD, VIRTUAL/USD, RAY/USD, IMX/USD, WLD/USD, INJ/USD, LDO/USD,
+    QNT/USD, PENGU/USD, FLOKI/USD, PYTH/USD, STRK/USD, AERO/USD, JTO/USD,
+    MORPHO/USD, EIGEN/USD, W/USD, SNX/USD, POPCAT/USD, BIO/USD, PNUT/USD,
+    ORCA/USD, VVV/USD, MOODENG/USD, SUI/USD, SKY/USD, XCN/USD, WLFI/USD,
+    ZORA/USD, SEI/USD, ASTER/USD, XPL/USD, HYPE/USD, AVNT/USD, SYRUP/USD,
+    SKR/USD, MEGA/USD, SENT/USD, CHIP/USD, FLR/USD, RE/USD, BILL/USD,
+  ]
   timeframe: 1h
   start: "2025-01-01T00:00:00Z" # backfilled on coinbase; kraken can't reach it
   page_limit: 300            # clamped per exchange: coinbase 300, kraken 720
@@ -79,10 +96,25 @@ paper:                       # python -m jevtrade.paper run   (simulated fills o
   poll_delay_s: 30           # after a candle closes, wait this long for the exchange to publish it
   retry_s: 60                # after a failed step (network error), retry this soon
   max_catchup_bars: 48       # after downtime, older missed bars run risk-only (stops, no new entries)
-  stall_grace_bars: 3        # process a bar without a symbol whose candle is this late
+  stall_grace_bars: 1        # wait at most this many bars for a held coin's late candle; flat coins never wait
   log_inputs: true           # keep each state text with its decision
   daily_report: true         # write the report for each UTC day as its last bar is processed
   lock_path: null            # default: <sqlite_path>.paper.lock
+
+jev_paper:                   # the dashboard's Jev portfolio, replayed from the forward log
+  initial_equity: 10000
+  # Robinhood-like costs. Robinhood charges no commission on crypto; you pay
+  # its quote spread. Robinhood quotes for all 81 coins on 2026-10-05 07:05 UTC
+  # had bid and ask about 0.95% either side of the mid on BTC and ETH and up
+  # to about 1.15% on the thinnest coins, so a round trip costs ~1.9-2.3%.
+  # For an exchange with fees instead: fee_bps = its taker fee, spread_bps ~ 1-5.
+  fee_bps: 0                 # per side, on notional
+  slippage_bps: 0            # beyond the quoted spread
+  spread_bps: 95             # per side from the mid, deep markets (BTC, ETH)
+  thin_extra_bps: 20         # added for thin coins: in full at 100x below ref_volume_usd (log scale)
+  ref_volume_usd: 5000000    # hourly Coinbase dollar volume (median of the last 24 logged hours)
+  volume_bars: 24
+  max_volume_frac: 0.01      # a buy is at most 1% of that hourly dollar volume; null = no cap
 
 report:                      # python -m jevtrade.report [--day YYYY-MM-DD]
   output_dir: reports/out    # <output_dir>/<run id>/<day>.md and .json (git-ignored)
@@ -92,3 +124,16 @@ api:                         # python -m jevtrade.api   (GET only, database open
   host: 127.0.0.1            # 0.0.0.0 inside docker; keep it off the public internet
   port: 8000
   cors_origins: ["http://localhost:5173"]   # the dashboard's dev server
+
+forward_log:                 # the dashboard's "Jev forward log": the collect workflow's data-log branch
+  source: github             # github | local | off
+  repo: JaeHyun-Cha-00/jev_crypto_trading
+  branch: data-log
+  local_dir: data-log        # for source: local (e.g. `git worktree add data-log origin/data-log`)
+  refresh_seconds: 300       # re-read at most this often; on failure the last good data is kept
+  max_days: 30               # newest day files to load
+  token_env: GITHUB_TOKEN    # optional token for a private repo or higher GitHub rate limits
+  # Fresh start (candle open, UTC). The collect workflow never asks Jev about an
+  # earlier candle (its backfill stops here), and the dashboard ignores earlier
+  # lines, so the portfolio starts at its full balance from this hour. null: no cutoff.
+  start: "2026-10-05T06:00:00Z"

@@ -2,7 +2,9 @@
 
 Every route is a GET. The database is opened with SQLite's `mode=ro`, so
 the API cannot write even by mistake, and it never touches an exchange or
-the model. It serves the dashboard (stage 10) and anything else that wants
+the model. The forward-log routes only read the collector's JSONL, locally
+or from GitHub (jevtrade.api.forward), and /api/forward/paper replays Jev's
+logged answers through the simulator (jevtrade.api.jev_paper). It serves the dashboard (stage 10) and anything else that wants
 to watch the paper account.
 """
 
@@ -20,6 +22,9 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..sim import SimState
+from ..data.timeframes import timeframe_ms
+from .forward import ForwardLog
+from .jev_paper import replay
 from .settings import ApiConfig  # noqa: F401  (re-exported)
 
 
@@ -36,8 +41,10 @@ def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
 
-def create_app(app_cfg) -> FastAPI:
-    """`app_cfg` is a jevtrade.config.AppConfig."""
+def create_app(app_cfg, forward_log: ForwardLog | None = None) -> FastAPI:
+    """`app_cfg` is a jevtrade.config.AppConfig; `forward_log` overrides the
+    loader built from `app_cfg.forward_log` (tests inject one)."""
+    fwd = forward_log or ForwardLog(app_cfg.forward_log)
     db_path = Path(app_cfg.storage.sqlite_path)
     app = FastAPI(title="jevtrade (read-only)", version="1",
                   description="Paper-trading state. GET only; the database is opened read-only.")
@@ -249,5 +256,33 @@ def create_app(app_cfg) -> FastAPI:
         eq = eq.iloc[::step]
         return {"summary": json.loads((d / "summary.json").read_text()),
                 "equity": [{"ts": str(t), "equity": float(e)} for t, e in eq.itertuples(index=False)]}
+
+    @app.get("/api/forward/summary")
+    def forward_summary():
+        """Jev's hourly forward log (data-log branch) scored against realized outcomes."""
+        return fwd.summary()
+
+    @app.get("/api/forward/rows")
+    def forward_rows(symbol: str | None = None, limit: int = Query(100, ge=1, le=2_000)):
+        """Recent decisions, newest first, each with its outcome (null while pending)."""
+        return fwd.rows(symbol, limit)
+
+    paper_cache: dict = {}
+
+    @app.get("/api/forward/paper")
+    def forward_paper(actions: int = Query(200, ge=0, le=5_000)):
+        """Jev's simulated account: the policy and simulator replayed over the forward log's
+        answers and closes from forward_log.start on. No model or exchange calls;
+        fills are simulated."""
+        snap = fwd.snapshot()
+        if paper_cache.get("snap") is not snap:   # replay once per forward-log refresh
+            start = app_cfg.forward_log.start_ms()
+            rows = snap.rows if start is None else [r for r in snap.rows if r["candle_ts"] >= start]
+            out = replay(rows, app_cfg, timeframe_ms(app_cfg.data.timeframe))
+            out["tracking_since"] = start if start is not None else (out["curve"][0]["bar_ts"] if out["curve"] else None)
+            paper_cache.update(snap=snap, out=out)
+        out = dict(paper_cache["out"])
+        out["actions"] = out["actions"][:actions]
+        return out
 
     return app

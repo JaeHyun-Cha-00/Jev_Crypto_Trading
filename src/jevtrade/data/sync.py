@@ -61,18 +61,25 @@ def sync_symbol(
                               page_limit, skip_empty=True)
         inserted += store.upsert(exchange, symbol, timeframe, candles)
 
-    # One backfill attempt per gap; anything left is a real exchange gap
-    # (e.g. maintenance) and is reported, not invented.
+    # One backfill attempt per gap, ever; anything left is a real exchange gap
+    # (e.g. maintenance, or an hour with no trades) and is reported, not
+    # invented. Tried gaps are remembered so a thin coin's hundreds of empty
+    # hours are not re-fetched on every sync.
     gaps = detect_gaps(store.timestamps(exchange, symbol, timeframe), tf_ms)
-    for g in gaps:
+    tried = store.tried_gaps(exchange, symbol, timeframe)
+    todo = [g for g in gaps if (g.after_ts, g.before_ts) not in tried]
+    for g in todo:
         candles = fetch_range(
             source, symbol, timeframe, g.after_ts + tf_ms, g.before_ts - tf_ms, tf_ms, page_limit,
             skip_empty=deep_history,
         )
         inserted += store.upsert(exchange, symbol, timeframe, candles)
-    if gaps:
+    if todo:
         gaps = detect_gaps(store.timestamps(exchange, symbol, timeframe), tf_ms)
+        store.mark_gaps_tried(exchange, symbol, timeframe, [(g.after_ts, g.before_ts) for g in gaps])
+        new = {(g.after_ts, g.before_ts) for g in todo}
         for g in gaps:
-            log.warning("%s %s: %d missing candles after ts=%d", symbol, timeframe, g.missing, g.after_ts)
+            if (g.after_ts, g.before_ts) in new:
+                log.warning("%s %s: %d missing candles after ts=%d", symbol, timeframe, g.missing, g.after_ts)
 
     return SyncResult(symbol, inserted, store.last_ts(exchange, symbol, timeframe), gaps)

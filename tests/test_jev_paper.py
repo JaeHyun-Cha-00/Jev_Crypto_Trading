@@ -1,0 +1,207 @@
+"""Jev paper account replayed from forward-log rows: no model or network calls."""
+
+import pytest
+
+from jevtrade.api.forward import join
+from jevtrade.api.jev_paper import replay
+from jevtrade.api.settings import JevPaperConfig
+from jevtrade.config import AppConfig
+
+H = 3_600_000
+T0 = 1791086400000
+
+
+def row(sym, i, close, up=0.1, down=0.1, status="answered"):
+    probs = {"up": up, "flat": round(1 - up - down, 4), "down": down}
+    return {"symbol": sym, "candle_ts": T0 + i * H, "close": close, "status": status,
+            "called_at": f"2026-10-04T{i:02d}:07:00Z", "served_model": "typesafe/jev-test",
+            "answers": {"direction": {"type": "choice", "choice": max(probs, key=probs.get),
+                                      "probabilities": probs}} if status == "answered" else {}}
+
+
+def old_costs():
+    """The pre-spread cost model (10bps fee, 2bps slippage), so timing tests read in round numbers."""
+    cfg = AppConfig()
+    cfg.jev_paper = JevPaperConfig(fee_bps=10, slippage_bps=2, spread_bps=0, thin_extra_bps=0)
+    return cfg
+
+
+def run(rows, cfg=None):
+    return replay(join(rows, []), cfg or old_costs(), H)
+
+
+def test_empty_log_is_a_flat_account():
+    r = run([])
+    assert r["equity"] == r["initial_equity"] and r["trades"] == [] and r["curve"] == []
+
+
+def test_buy_fills_next_open_and_exits_after_horizon():
+    rows = [row("BTC/USD", 0, 100.0, up=0.6, down=0.1)]                    # passes 0.55 and edge 0.10
+    rows += [row("BTC/USD", i, 100.0 + i) for i in range(1, 7)]
+    rows += [row("ETH/USD", i, 50.0, up=0.5, down=0.1) for i in range(7)]  # below threshold: never bought
+    r = run(rows)
+    buys = [a for a in r["actions"] if a["action"] == "enter"]
+    assert [(a["symbol"], a["bar_ts"]) for a in buys] == [("BTC/USD", T0)]
+    assert buys[0]["size_frac"] == pytest.approx(1 / 3)   # 1% risk / 3% stop
+    [t] = r["trades"]
+    # Entry at the next hour's open (= hour 0's close) plus 2bps slippage.
+    assert t["entry_ts"] == T0 + H and t["entry_price"] == pytest.approx(100.0 * 1.0002)
+    assert t["exit_reason"].startswith("max_holding") and t["bars_held"] == 4
+    assert t["pnl"] > 0 and r["equity"] == pytest.approx(r["initial_equity"] + t["pnl"])
+    assert r["per_symbol"]["ETH/USD"] == {"trades": 0, "pnl": 0, "buys": 0}
+    assert r["actions"][0]["bar_ts"] == T0 + 6 * H   # newest first
+    assert len(r["curve"]) == 7
+
+
+def test_buy_on_last_hour_is_pending_and_errors_never_trade():
+    rows = [row("BTC/USD", 0, 100.0, status="error"), row("BTC/USD", 1, 100.0, status="abstain"),
+            row("BTC/USD", 2, 100.0, up=0.7, down=0.0)]
+    r = run(rows)
+    reasons = {a["bar_ts"]: a["reason"] for a in r["actions"]}
+    assert reasons[T0].startswith("no_decision") and reasons[T0 + H].startswith("abstain")
+    assert r["trades"] == [] and r["positions"] == []
+    assert [(p["symbol"], p["kind"]) for p in r["pending"]] == [("BTC/USD", "enter")]
+
+
+def test_open_position_is_marked_to_the_last_close():
+    rows = [row("BTC/USD", 0, 100.0, up=0.7, down=0.0), row("BTC/USD", 1, 100.0), row("BTC/USD", 2, 101.0)]
+    r = run(rows)
+    [p] = r["positions"]
+    assert p["mark"] == 101.0 and p["unrealized_pnl"] > 0
+    assert r["equity"] > r["cash"]
+
+
+def test_buys_and_calls_cover_every_hour_not_just_recent_actions():
+    rows = [row("BTC/USD", 0, 100.0, up=0.7, down=0.0)] + [row("BTC/USD", i, 100.0) for i in range(1, 6)]
+    rows += [row("ETH/USD", i, 50.0) for i in range(6)]
+    r = run(rows)
+    assert r["calls"] == 12 and [b["symbol"] for b in r["buys"]] == ["BTC/USD"]
+
+
+def test_many_symbols_replay_quickly():
+    import time
+    rows = [row(f"C{k}/USD", i, 100.0 + (i % 7), up=0.6 if i % 50 == 0 else 0.1, down=0.1)
+            for k in range(81) for i in range(48)]
+    t = time.perf_counter()
+    r = run(rows)
+    assert time.perf_counter() - t < 5
+    assert r["calls"] == 81 * 48 and len(r["per_symbol"]) == 81
+
+
+def test_entries_go_to_the_strongest_edge_not_alphabetical_order():
+    # Caps leave room for less than three full positions; the weakest signal must lose out.
+    rows = [row("AAA/USD", 0, 10.0, up=0.56, down=0.40),   # edge 0.16
+            row("MMM/USD", 0, 10.0, up=0.70, down=0.05),   # edge 0.65
+            row("ZZZ/USD", 0, 10.0, up=0.80, down=0.00)]   # edge 0.80
+    rows += [row(s, 1, 10.0) for s in ("AAA/USD", "MMM/USD", "ZZZ/USD")]
+    r = run(rows)
+    hour0 = [a for a in reversed(r["actions"]) if a["bar_ts"] == T0]
+    assert [a["symbol"] for a in hour0] == ["ZZZ/USD", "MMM/USD", "AAA/USD"]
+    bought = {a["symbol"]: a["size_frac"] for a in hour0 if a["action"] == "enter"}
+    assert "ZZZ/USD" in bought and "MMM/USD" in bought
+    assert bought.get("AAA/USD", 0) < bought["MMM/USD"]
+
+
+def _at(i, minute):
+    """ISO time `minute` minutes into hour i (T0 is 04:00 UTC)."""
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp((T0 + i * H) / 1000 + minute * 60, tz=timezone.utc).isoformat()
+
+
+def test_buy_fills_when_the_run_happened_at_the_interpolated_price():
+    # Hour 0's answer was logged by a run 30 minutes into hour 1 (GitHub started late).
+    rows = [dict(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), called_at=_at(1, 30))]
+    rows += [row("BTC/USD", 1, 110.0), row("BTC/USD", 2, 110.0)]
+    r = run(rows)
+    [p] = r["positions"]
+    assert p["entry_ts"] == T0 + H
+    # Halfway through hour 1: between its open (100) and close (110), plus 2bps slippage.
+    assert p["entry_price"] == pytest.approx(105.0 * 1.0002)
+
+
+def test_a_run_hours_late_fills_hours_later():
+    rows = [dict(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), called_at=_at(3, 0))]
+    rows += [row("BTC/USD", i, 100.0 + i) for i in range(1, 3)]
+    r = run(rows)
+    # The run that saw the answer had not happened by the last logged hour.
+    assert r["positions"] == [] and [p["kind"] for p in r["pending"]] == ["enter"]
+    assert r["pending"][0]["fill_after"] == T0 + 3 * H
+    r = run(rows + [row("BTC/USD", 3, 103.0), row("BTC/USD", 4, 104.0)])
+    [p] = r["positions"]
+    assert p["entry_ts"] == T0 + 3 * H and p["entry_price"] == pytest.approx(102.0 * 1.0002)
+
+
+def test_rows_without_called_at_fill_at_the_next_open():
+    rows = [dict(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), called_at=None), row("BTC/USD", 1, 104.0)]
+    [p] = run(rows)["positions"]
+    assert p["entry_ts"] == T0 + H and p["entry_price"] == pytest.approx(100.0 * 1.0002)
+
+
+def _ohlc(r, o, h, lo, v=1000.0):
+    return dict(r, open=o, high=h, low=lo, volume=v)
+
+
+def test_stop_triggers_on_the_logged_intrabar_low():
+    # Hour 2 dips 5% inside the hour but closes flat: only the real low reveals it.
+    rows = [_ohlc(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), 100.0, 100.5, 99.5),
+            _ohlc(row("BTC/USD", 1, 100.0), 100.0, 100.5, 99.5),
+            _ohlc(row("BTC/USD", 2, 100.0), 100.0, 100.5, 95.0),
+            _ohlc(row("BTC/USD", 3, 100.0), 100.0, 100.5, 99.5)]
+    [t] = run(rows)["trades"]
+    assert t["exit_reason"].startswith("stop_loss") and t["exit_ts"] == T0 + 2 * H
+    stop = 100.0 * 1.0002 * 0.97
+    assert t["exit_price"] == pytest.approx(stop * (1 - 5 / 10_000))
+    # The same hours logged with closes only never stop out.
+    closes_only = run([{k: v for k, v in r.items() if k not in ("open", "high", "low")} for r in rows])
+    assert closes_only["trades"] == [] and len(closes_only["positions"]) == 1
+
+
+def test_close_only_rows_still_open_at_the_previous_close():
+    rows = [row("BTC/USD", 0, 100.0, up=0.6, down=0.1), _ohlc(row("BTC/USD", 1, 104.0), 101.0, 105.0, 100.5)]
+    [p] = run(rows)["positions"]
+    assert p["entry_price"] == pytest.approx(101.0 * 1.0002)   # hour 1's logged open, not hour 0's close
+
+
+def test_a_late_fill_only_sees_part_of_the_hours_dip():
+    from jevtrade.api.jev_paper import Bar, _fill_bar
+    bar = Bar(100.0, 110.0, 90.0, 100.0)
+    rest = _fill_bar(bar, 0, int(0.75 * H), H)
+    assert rest.open == 100.0 and rest.low == pytest.approx(97.5) and rest.high == pytest.approx(102.5)
+    assert _fill_bar(bar, 0, 0, H) == bar
+
+
+def test_robinhood_spread_is_paid_on_both_sides_and_wider_for_thin_coins():
+    cfg = AppConfig()   # defaults: no fee, 95bps per side, up to +20bps for thin coins
+    assert cfg.jev_paper.fee_bps == 0
+    deep, thin = 1_000_000.0, 10.0          # x $100 close: $100M vs $1k an hour
+    rows = []
+    for sym, vol in (("BTC/USD", deep), ("PNUT/USD", thin)):
+        rows += [_ohlc(row(sym, 0, 100.0, up=0.6, down=0.1), 100.0, 100.0, 100.0, vol)]
+        rows += [_ohlc(row(sym, i, 100.0), 100.0, 100.0, 100.0, vol) for i in range(1, 6)]
+    r = run(rows, cfg)
+    by = {t["symbol"]: t for t in r["trades"]}
+    assert by["BTC/USD"]["entry_price"] == pytest.approx(100.95)
+    assert by["BTC/USD"]["exit_price"] == pytest.approx(99.05)
+    assert by["PNUT/USD"]["entry_price"] == pytest.approx(101.15)
+    assert by["BTC/USD"]["fees"] == 0 and by["BTC/USD"]["pnl"] < 0   # a flat price still loses ~1.9%
+    assert r["spread_bps"] == {"min": 95, "max": 115}
+
+
+def test_spread_scales_on_log_volume():
+    c = JevPaperConfig()
+    assert c.spread_for(5e6) == c.spread_for(5e9) == 95
+    assert c.spread_for(5e5) == pytest.approx(105) and c.spread_for(5e4) == pytest.approx(115)
+    assert c.spread_for(None) == c.spread_for(0) == 115
+
+
+def test_buys_are_capped_at_a_share_of_hourly_dollar_volume():
+    cfg = old_costs()
+    cfg.jev_paper.max_volume_frac = 0.01
+    # $100 x 500 = $50k an hour: at most $500 of it, though the rules want ~$3.3k.
+    rows = [_ohlc(row("PNUT/USD", 0, 100.0, up=0.6, down=0.1), 100.0, 100.0, 100.0, 500.0),
+            _ohlc(row("PNUT/USD", 1, 100.0), 100.0, 100.0, 100.0, 500.0)]
+    [p] = run(rows, cfg)["positions"]
+    assert p["qty"] * p["entry_price"] == pytest.approx(500.0)
+    cfg.jev_paper.max_volume_frac = None
+    [p] = run(rows, cfg)["positions"]
+    assert p["qty"] * p["entry_price"] == pytest.approx(10_000 / 3, rel=1e-3)

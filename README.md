@@ -21,19 +21,20 @@ trade, and when to exit. All risk limits live in code, never in prompts.
 | `src/jevtrade/data/` | Public OHLCV via ccxt → SQLite, incremental, gap detection, UTC | ✅ stage 1 |
 | `src/jevtrade/features/` | Closed-candle features, no look-ahead | ✅ stage 2 |
 | `src/jevtrade/state/` | Anonymized JSON market state for the model | ✅ stage 3 |
-| `src/jevtrade/decision/` | `DecisionModel`: Mock ✅, Baseline ✅, Jev (pending docs) | ✅ stage 3 (partial) |
+| `src/jevtrade/decision/` | `DecisionModel`: Mock, Baseline, Jev (via OpenRouter) | ✅ stage 3 |
 | `src/jevtrade/policy/` | Probabilities → actions, risk limits | ✅ stage 3 |
 | `src/jevtrade/backtest/` | Event-driven walk-forward backtester | ✅ stage 4 |
 | `src/jevtrade/paper/` | Live paper loop, restart-safe, simulated fills only | ✅ stage 7 |
 | `src/jevtrade/report/` | Daily Markdown report: account, trades, decisions, calibration | ✅ stage 8 |
 | `src/jevtrade/api/` | Read-only FastAPI over the store and reports | ✅ stage 9 |
 | `web/` | React dashboard over the API | ✅ stage 10 |
+| `src/jevtrade/collect/` | Hourly forward log of Jev answers and outcomes (GitHub Actions → `data-log` branch) | ✅ |
 
 ## Quick start (Docker)
 
 ```bash
-cp .env.example .env              # optional; only needed for the Jev model
-docker compose up -d --build      # paper loop + read-only API + dashboard
+cp .env.example .env              # optional; only needed for a private repo's forward log
+docker compose up -d --build      # read-only API + dashboard
 ```
 
 Then open http://localhost:8080. See
@@ -46,7 +47,7 @@ Requires Python 3.11 or newer.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'   # or '.[api]' for just the runtime plus the API server
-cp .env.example .env   # only needed once the JevModel stage lands
+cp .env.example .env   # only needed for decision.model: jev, or a private repo's forward log
 pytest
 ```
 
@@ -60,7 +61,7 @@ ignores), never from YAML.
 ```yaml
 data:
   exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken
-  symbols: [BTC/USD, ETH/USD]
+  symbols: [BTC/USD, ETH/USD, ...]  # 81 coins: Robinhood-tradable with a Coinbase USD market
   timeframe: 1h
   start: "2025-01-01T00:00:00Z"   # earliest candle kept; backfilled on coinbase
   page_limit: 300            # candles per request, clamped per exchange
@@ -86,12 +87,12 @@ python -m jevtrade.data            # sync all configured symbols up to the last 
 - The default exchange is Coinbase Exchange (ccxt id `coinbaseexchange`,
   `api.exchange.coinbase.com`). It returns at most 300 candles per request
   but pages back through full hourly history, so a fresh store is backfilled
-  to `start` (more than a year of BTC/USD and ETH/USD by default). Windows
+  to `start` (more than a year per coin by default). Windows
   with no candles, such as an outage, are stepped over and then reported as
   gaps. If `start` is moved earlier, the missing head is backfilled on the
   next sync.
-- Kraken remains available: set `exchange: kraken` (the USD symbols exist
-  there too). **Limitation:** Kraken's public OHLC endpoint returns only the
+- Kraken remains available: set `exchange: kraken` (BTC/USD and ETH/USD
+  exist there; not every coin in the default list does). **Limitation:** Kraken's public OHLC endpoint returns only the
   most recent 720 candles (about 30 days at 1h), whatever `since` is set to,
   so a Kraken store starts about 30 days back and a sync stopped for longer
   leaves an unresolved gap. Stores are keyed by exchange, so Kraken and
@@ -156,7 +157,7 @@ or down over `horizon_bars`, where "flat" means within ±`flat_band_pct`.
   latency, tokens and cost; `--record DIR` saves a new fixture):
 
   ```bash
-  python -m jevtrade.decision --symbol BTC/USDT
+  python -m jevtrade.decision --symbol BTC/USD
   ```
 
 The `decisions` table logs every call with the input hash, input text, model
@@ -206,6 +207,12 @@ with `bar_open` and `bar_low`.
 - Each decision only sees candles up to its bar. Features are computed once
   and sliced, which is safe because they are causal; a test checks that
   appending future bars leaves every earlier decision unchanged.
+- Within a bar, coins act in priority order: open positions first (a stop
+  frees room before anything new is sized), then the rest by edge
+  (p(up) − p(down)), highest first. When the exposure caps leave room for
+  only a few entries, the strongest signals get them, not the coins listed
+  first in `data.symbols`. The paper loop and the dashboard's Jev replay use
+  the same order.
 - Entries and model or holding exits fill at the **next bar's open**, moved
   `slippage_bps` against the trade. Stop exits fill **inside the bar** at the
   action's `fill_price`. An entry's stop is re-anchored to its fill price.
@@ -218,7 +225,8 @@ with `bar_open` and `bar_low`.
   id. `summary.json`, `summary.md`, `trades.csv` and `equity.csv` go to
   `backtest.output_dir/<run id>/`.
 - `--model jev` costs one API call per symbol per bar and needs
-  `--allow-live-model`. Runs that end before the pinned snapshot's date are
+  `--allow-live-model`. Over all 81 default coins since 2025 that is about
+  1.2M calls (roughly $100), so pass `--symbols` to narrow it. Runs that end before the pinned snapshot's date are
   labelled potentially contaminated (see below). Tests never call Jev.
 
 Results on Coinbase BTC/USD and ETH/USD, 1h, 2025-01-01 to 2026-10-05, with the
@@ -269,9 +277,12 @@ model is Jev.
 - A fresh run starts at the latest closed bar with `paper.initial_equity`;
   it doesn't replay history. Changing the decision model of an existing run
   is refused; set `paper.run_id` to start a new paper account.
-- If one symbol's candle is late, the loop waits for it (retrying every
-  `retry_s`). After `stall_grace_bars` it processes the bar without that
-  symbol.
+- If a coin the account holds (or has an order queued for) has no candle
+  yet, the loop waits for it, retrying every `retry_s`, for at most
+  `stall_grace_bars` (1) bars, then processes the bar without it. A flat
+  coin with no candle is skipped for that bar without waiting: Coinbase
+  publishes no candle for an hour without trades, and a coin it doesn't
+  hold has nothing to protect.
 - `decision.model: jev` needs `--allow-live-model` or
   `JEVTRADE_ALLOW_LIVE_MODEL=1`, because it calls the paid API once per
   symbol per bar.
@@ -349,6 +360,9 @@ firewall or VPN; it has no authentication.
 | `/api/candles?symbol=BTC/USD&limit=` | stored candles |
 | `/api/reports`, `/api/reports/{day}` | daily reports (Markdown and JSON) |
 | `/api/backtests`, `/api/backtests/{run_id}` | backtest summaries and downsampled equity |
+| `/api/forward/summary` | the forward log scored: counts, hit rate vs. baselines, confusion matrix, calibration, Brier/log loss, cost, source and any fetch error |
+| `/api/forward/rows?symbol=&limit=` | recent forward calls joined with their outcomes (null while pending), newest first, without `state` |
+| `/api/forward/paper?actions=` | Jev's simulated account replayed from the forward log: equity, curve, positions, pending orders, trades, and each hour's action (newest first) |
 
 Every paper route takes `?run_id=` (default `paper.run_id`).
 
@@ -361,31 +375,111 @@ npm run build                   # static files in web/dist, for any web server t
 ```
 
 A single page (React + TypeScript, Vite, no chart library) that reads the
-API and refreshes every minute. It shows:
-- Loop health from the paper heartbeat, with an icon and label.
-- Tiles for equity, return since start, today's return, drawdown, and
-  closed trades with win rate.
-- The equity curve with a hover crosshair (24 hours, 7 days, 30 days, all).
-  The dashed line is the starting balance.
-- Open positions with stop, mark and unrealized PnL, plus pending orders.
-- The sizing and risk limits in force.
-- Recent trades and recent decisions (p(up), p(flat), p(down), the
-  policy's action and reason), filterable by symbol.
-- Daily reports and saved backtests.
+API and refreshes every minute. It tracks only Jev: the mock/baseline paper
+loop and backtests are no longer shown. It shows:
+- Health from the forward log's last Jev call.
+- **Jev paper portfolio**: the policy and simulator replayed over the answers
+  Jev already gave in the forward log (`/api/forward/paper`), with the equity
+  curve (24 hours, 7 days, 30 days, all), cash, buys, drawdown, closed
+  trades and realized PnL. No extra Jev calls and no real orders.
+- **What Jev bought**, at the top: every coin it is buying, holding or sold,
+  with times, prices, size and P&L. Coins Jev has bought get a filter chip;
+  the rest of `data.symbols` sit in a picker, so the page scales to many coins.
+- Buys, trades and PnL per coin, for coins Jev has bought.
+- The trading rules in force.
+- Jev's activity: its buys, its closed trades, and every hourly call with
+  p(up), p(down), the policy's action and reason, filterable by coin.
+- The Jev forward log (see below): how the hourly forward calls compare
+  with what happened.
+
+The replay prices each hour from the logged closes (an hour opens at the
+previous hour's close), so stops see closes only, not intrabar dips. It covers
+the symbols the collector asks about (`data.symbols`). The replay runs once
+per forward-log refresh and is cached. It counts only candles from
+`forward_log.start` on (the dashboard shows "Tracking since").
 
 It follows the OS light or dark setting and works down to phone width. Set
 `JEVTRADE_API` to point the dev server at an API elsewhere.
 
+### Forward data collection (GitHub Actions)
+
+`.github/workflows/collect.yml` runs at 7 minutes past every hour (and on
+demand via **Run workflow**). Each run:
+
+- fetches recent public 1h candles for every configured symbol from Coinbase;
+- asks Jev (the pinned snapshot) the configured questions once for each closed
+  candle that has no answer logged yet, looking back at most 24 candles, so a
+  skipped or delayed run is backfilled and no candle is asked twice;
+- logs the realized outcome of each decision once its horizon has closed;
+- commits the JSONL files to the orphan `data-log` branch, never to main.
+
+`forward_log.start` is a fresh-start cutoff: the collector never asks about a
+candle before it (the backfill stops there), and the API ignores earlier lines.
+To restart, move it to a future hour and clear `decisions/` and `outcomes/` on
+`data-log` (archive the old head first).
+
+No trading and no simulated positions. Calls that got no response at all are
+logged with `status: "error"` and asked again on the next run. The key comes
+from the `OPENROUTER_API_KEY` repository secret (Settings → Secrets and
+variables → Actions); the run stops before any call if it is missing. Each
+call costs money: about $0.00008 at the recorded ~2,000 input tokens, so the
+default 81 coins hourly is roughly $0.16 a day (about $4.70 a month). Trim
+`data.symbols` to spend less. A coin whose candles can't be fetched is skipped
+for that run and retried the next hour; the other coins still run.
+
+Locally, against any directory:
+
+```bash
+python -m jevtrade.collect --out data-log --max-backfill 24
+```
+
+#### Jev forward log on the dashboard
+
+The API reads the `data-log` branch and the dashboard's **Jev forward log**
+section shows how the calls compare with what happened `horizon_bars` later:
+
+- tiles for scored calls (with pending, abstain and error counts), Jev's
+  direction hit rate marked ▲/▼ against the best naive baseline, direction
+  Brier next to the Brier of the realized base rates, and the cost so far;
+- Jev's hit rate next to "always flat" and "always the most common realized
+  class" (a hindsight baseline; usually flat, about 75% of 4h windows);
+- a confusion matrix (Jev's call vs. what happened) and a calibration table
+  (Jev's direction confidence in bins vs. hit rate), plus log loss and the
+  adverse-move Brier (the `adverse_move` Noul is P(yes));
+- the recent calls: candle, symbol, call and confidence, regime, P(adverse),
+  realized direction and return, and hit, miss or pending.
+
+It follows the page's symbol filter and refresh. Configure it under
+`forward_log` in `config/default.yaml`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `source` | `github` | `github` (HTTPS), `local` (a directory) or `off` |
+| `repo`, `branch` | this repo, `data-log` | where `source: github` reads |
+| `local_dir` | `data-log` | for `source: local`, e.g. `git worktree add data-log origin/data-log` |
+| `refresh_seconds` | `300` | re-read at most this often; a failed refresh keeps the last good data and shows the error |
+| `max_days` | `30` | newest day files to load |
+| `token_env` | `GITHUB_TOKEN` | env var with an optional GitHub token |
+
+The GitHub source lists files with the contents API and downloads only new
+or changed day files. Set `GITHUB_TOKEN` in `.env` if the repo is private
+(a fine-grained token with read-only Contents access on this repo is
+enough). If GitHub won't show the repo, the section says whether the token
+is missing or lacks access. It only reads: no writes, model calls or exchange calls.
+
 ## Running on a fresh Linux VM
 
-`docker compose` runs the three services together. Their data lives in
-Docker volumes, so it survives restarts, rebuilds and reboots.
+`docker compose` runs two services. The dashboard shows Jev's hourly forward
+log, which the collect workflow (GitHub Actions) writes to the `data-log`
+branch, so the VM itself never calls Jev, trades, or stores candles.
 
 | Service | What it does |
 |---|---|
-| `paper` | `python -m jevtrade.paper run`: syncs public candles, processes each closed bar once, writes the daily report |
-| `api` | `python -m jevtrade.api`: read-only API, reachable only from the other containers |
+| `api` | `python -m jevtrade.api`: read-only API that reads the forward log from GitHub, reachable only from `web` |
 | `web` | nginx serving the dashboard and passing `GET /api/*` to `api`; published on `127.0.0.1:8080` |
+
+The local paper loop (`python -m jevtrade.paper run`, section 7) is not part
+of the compose stack; run it yourself if you want it.
 
 A 1 vCPU / 1 GB VM (any provider, Ubuntu 24.04 or Debian 12) is enough. The
 VM needs outbound HTTPS only. Open no inbound ports other than SSH.
@@ -403,25 +497,18 @@ VM needs outbound HTTPS only. Open no inbound ports other than SSH.
    ```bash
    git clone https://github.com/JaeHyun-Cha-00/Jev_Crypto_Trading.git
    cd Jev_Crypto_Trading
-   cp .env.example .env    # leave as is for the mock or baseline model
-   nano config/default.yaml   # optional: decision.model, symbols, paper.initial_equity
+   cp .env.example .env    # set GITHUB_TOKEN only if the repo is private
    ```
-
-   To paper-trade with Jev, set `decision.model: jev`, and put
-   `OPENROUTER_API_KEY=...` and `JEVTRADE_ALLOW_LIVE_MODEL=1` in `.env`.
-   That costs one API call per symbol per hour.
 
 3. **Start everything:**
 
    ```bash
    docker compose up -d --build
    docker compose ps                  # api should become "healthy"
-   docker compose logs -f paper       # first start backfills candles, then processes the latest bar
+   docker compose logs -f api
    ```
 
-   `restart: unless-stopped` brings all three back after a crash or a
-   reboot. The paper loop resumes from its last committed bar and catches
-   up on anything it missed.
+   `restart: unless-stopped` brings both back after a crash or a reboot.
 
 4. **Open the dashboard from your laptop** through an SSH tunnel (the port
    is bound to the VM's localhost and has no login):
@@ -434,18 +521,14 @@ VM needs outbound HTTPS only. Open no inbound ports other than SSH.
 Day to day:
 
 ```bash
-docker compose exec paper python -m jevtrade.paper status   # account in the terminal
-docker compose exec paper python -m jevtrade.report --day 2026-10-04
-docker compose restart paper        # after editing config/default.yaml (mounted read-only)
-git pull && docker compose up -d --build   # update
-docker compose down                 # stop (data volumes are kept; `down -v` deletes them)
+docker compose restart api          # after editing config/default.yaml (mounted read-only)
+git pull && docker compose up -d --build --remove-orphans   # update
+docker compose down                 # stop
 ```
 
-Back up the store with
-`docker compose exec paper python -c "import sqlite3; sqlite3.connect('data/jevtrade.sqlite').backup(sqlite3.connect('data/backup.sqlite'))"`
-followed by `docker compose cp paper:/app/data/backup.sqlite .`.
-`docker compose stop paper` is safe at any time: an interrupted bar is
-rolled back and redone on the next start.
+Upgrading from a version that also ran a `paper` service: `--remove-orphans`
+stops its old container. Its data stays in the `jevdata` and `jevreports`
+volumes until you delete them (`docker volume ls`, then `docker volume rm`).
 
 ## Evaluation validity
 
