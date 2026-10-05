@@ -352,6 +352,7 @@ firewall or VPN; it has no authentication.
 | `/api/backtests`, `/api/backtests/{run_id}` | backtest summaries and downsampled equity |
 | `/api/forward/summary` | the forward log scored: counts, hit rate vs. baselines, confusion matrix, calibration, Brier/log loss, cost, source and any fetch error |
 | `/api/forward/rows?symbol=&limit=` | recent forward calls joined with their outcomes (null while pending), newest first, without `state` |
+| `/api/forward/paper?actions=` | Jev's simulated account replayed from the forward log: equity, curve, positions, pending orders, trades, and each hour's action (newest first) |
 
 Every paper route takes `?run_id=` (default `paper.run_id`).
 
@@ -364,19 +365,23 @@ npm run build                   # static files in web/dist, for any web server t
 ```
 
 A single page (React + TypeScript, Vite, no chart library) that reads the
-API and refreshes every minute. It shows:
-- Loop health from the paper heartbeat, with an icon and label.
-- Tiles for equity, return since start, today's return, drawdown, and
-  closed trades with win rate.
-- The equity curve with a hover crosshair (24 hours, 7 days, 30 days, all).
-  The dashed line is the starting balance.
-- Open positions with stop, mark and unrealized PnL, plus pending orders.
-- The sizing and risk limits in force.
-- Recent trades and recent decisions (p(up), p(flat), p(down), the
-  policy's action and reason), filterable by symbol.
-- Daily reports and saved backtests.
+API and refreshes every minute. It tracks only Jev: the mock/baseline paper
+loop and backtests are no longer shown. It shows:
+- Health from the forward log's last Jev call.
+- **Jev paper portfolio**: the policy and simulator replayed over the answers
+  Jev already gave in the forward log (`/api/forward/paper`), with the equity
+  curve (24 hours, 7 days, 30 days, all), cash, buys, drawdown, closed
+  trades and realized PnL. No extra Jev calls and no real orders.
+- What Jev holds (positions, pending buys) and buys, trades and PnL per coin.
+- The trading rules in force.
+- Jev's activity: its buys, its closed trades, and every hourly call with
+  p(up), p(down), the policy's action and reason, filterable by coin.
 - The Jev forward log (see below): how the hourly forward calls compare
   with what happened.
+
+The replay prices each hour from the logged closes (an hour opens at the
+previous hour's close), so stops see closes only, not intrabar dips. It covers
+the symbols the collector asks about (`data.symbols`: BTC/USD and ETH/USD).
 
 It follows the OS light or dark setting and works down to phone width. Set
 `JEVTRADE_API` to point the dev server at an API elsewhere.

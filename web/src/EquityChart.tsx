@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { EquityPoint } from "./api";
+import type { CurvePoint } from "./api";
 import { fmtMoney, fmtTime } from "./format";
 
 const NARROW = 600;
@@ -15,7 +15,7 @@ function niceTicks(lo: number, hi: number, n = 4): number[] {
 }
 
 /** Single-series equity line with a crosshair tooltip. One series, so no legend. */
-export function EquityChart({ points, initial }: { points: EquityPoint[]; initial: number }) {
+export function EquityChart({ points, initial }: { points: CurvePoint[]; initial: number }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const fillId = useId();
@@ -56,7 +56,7 @@ export function EquityChart({ points, initial }: { points: EquityPoint[]; initia
     // PAD, H and narrow all follow W.
   }, [points, initial, W]);
 
-  if (!geo) return <p className="muted">No equity yet. The paper loop records one point per closed bar.</p>;
+  if (!geo) return <p className="muted">No equity yet. Jev's account gets one point per logged hour.</p>;
 
   const onMove = (e: React.PointerEvent<SVGSVGElement>) => {
     const rect = svgRef.current!.getBoundingClientRect();
@@ -115,7 +115,7 @@ export function EquityChart({ points, initial }: { points: EquityPoint[]; initia
         <div className="tooltip" style={{ left: `${tipLeft}%`, transform: `translateX(${tipLeft > 60 ? "-105%" : "5%"})` }}>
           <strong>{fmtMoney(hp.equity)}</strong>
           <span>{fmtTime(hp.bar_ts)}</span>
-          <span>exposure {(hp.exposure * 100).toFixed(0)}%{hp.mode === "risk_only" ? ", risk-only catch-up" : ""}</span>
+          {hp.cash !== undefined && <span>in coins {Math.max(0, (1 - hp.cash / hp.equity) * 100).toFixed(0)}%</span>}
         </div>
       )}
     </div>
