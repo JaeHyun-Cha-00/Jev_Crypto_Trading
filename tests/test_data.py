@@ -84,3 +84,19 @@ def test_sync_with_capped_history_source():
     assert len(ts) == 720 and ts[0] == T0 + 280 * H and ts[-1] == T0 + 999 * H
     assert r.gaps == []
     assert src.calls <= 3
+
+
+def test_unresolvable_gap_is_fetched_once_then_left_alone():
+    all_c = synthetic_candles(40)
+    src = FakeSource(all_c, {T0 + 10 * H, T0 + 11 * H})
+    store = _store()
+    sync_symbol(src, store, EX, SYM, TF, H, T0, now_ms=T0 + 30 * H)
+    src.calls = 0
+    r = sync_symbol(src, store, EX, SYM, TF, H, T0, now_ms=T0 + 30 * H)
+    assert src.calls == 0                       # nothing new, and the known gap is not re-fetched
+    assert len(r.gaps) == 1                     # still reported
+    # A new gap later on is still tried once.
+    src.missing.add(T0 + 31 * H)
+    src.calls = 0
+    r = sync_symbol(src, store, EX, SYM, TF, H, T0, now_ms=T0 + 35 * H)
+    assert src.calls == 2 and len(r.gaps) == 2  # incremental fetch + one backfill of the new gap
