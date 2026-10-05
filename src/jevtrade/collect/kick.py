@@ -94,20 +94,24 @@ def main() -> None:
     token = os.environ.get(cfg.forward_log.token_env)
     if not token:
         raise SystemExit(f"set ${cfg.forward_log.token_env} (Actions: read and write) to start collect runs")
-    k = Kicker(cfg.forward_log.repo, token, args.ref)
+    run(Kicker(cfg.forward_log.repo, token, args.ref), args.minute, once=args.once)
+
+
+def run(k: Kicker, minute: int = 20, once: bool = False) -> None:
+    """Check at `minute` past every hour, forever (or once, now). Errors are logged and
+    retried next hour; with `once` they exit non-zero."""
     while True:
-        if not args.once:
-            wake = next_wake(datetime.now(timezone.utc), args.minute)
+        if not once:
+            wake = next_wake(datetime.now(timezone.utc), minute)
             time.sleep(max(0.0, (wake - datetime.now(timezone.utc)).total_seconds()))
         try:
             log.info("%s", k.tick(datetime.now(timezone.utc)))
         except Exception as e:  # noqa: BLE001 - keep the loop alive; next hour tries again
             log.warning("kick failed: %s", e)
-            if args.once:
+            if once:
                 raise SystemExit(1) from e
-        if args.once:
+        if once:
             return
-
 
 if __name__ == "__main__":
     main()
