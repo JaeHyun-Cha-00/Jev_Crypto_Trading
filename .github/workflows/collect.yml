@@ -7,7 +7,11 @@ name: collect
 
 on:
   schedule:
-    - cron: "7 * * * *"   # a few minutes after the hour, once Coinbase has the candle
+    # A few minutes after the hour, once Coinbase has the candle. GitHub ties a
+    # schedule to whoever last changed this line; while that was a commit author
+    # with no GitHub account, no scheduled run ever fired. If hourly runs stop,
+    # look for "schedule" events in the Actions tab.
+    - cron: "11 * * * *"
   workflow_dispatch:
 
 permissions:
