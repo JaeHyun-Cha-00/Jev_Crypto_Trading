@@ -417,8 +417,14 @@ shown. It shows:
   the rest of `data.symbols` sit in a picker, so the page scales to many coins.
 - Buys, trades and PnL per coin, for coins Jev has bought.
 - The trading rules in force, including whether the skill gate lets Jev buy.
-- Jev's activity: its buys, its closed trades, and every hourly call with
-  p(up), p(down), the policy's action and reason, filterable by coin.
+- Jev's activity: **By hour** (the default) lists every hour since tracking
+  started, bought or not: the coins Jev picked (answers that met the buy
+  thresholds) with their p(up), what the account did with them (bought, held
+  back by the skill gate, no room, already held), and once the question's
+  horizon has closed the picks' average return before and after a round trip
+  of costs next to the average coin's. An hour the collector skipped shows as
+  not asked. The other tabs: its buys, its closed trades, and every hourly
+  call with p(up), p(down), the policy's action and reason. All filter by coin.
 - The Jev forward log (see below): how the hourly forward calls compare
   with what happened.
 
