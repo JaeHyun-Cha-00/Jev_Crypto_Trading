@@ -20,9 +20,9 @@ trade, and when to exit. All risk limits live in code, never in prompts.
 |---|---|---|
 | `src/jevtrade/data/` | Public OHLCV via ccxt → SQLite, incremental, gap detection, UTC | ✅ stage 1 |
 | `src/jevtrade/features/` | Closed-candle features, no look-ahead | ✅ stage 2 |
-| `state/` | Anonymized text market state for Jev | planned |
-| `decision/` | `DecisionModel`: Jev / Mock / Baseline | planned |
-| `policy/` | Probabilities → actions, risk limits | planned |
+| `src/jevtrade/state/` | Anonymized JSON market state for the model | ✅ stage 3 |
+| `src/jevtrade/decision/` | `DecisionModel`: Mock ✅, Baseline ✅, Jev (pending docs) | ✅ stage 3 (partial) |
+| `src/jevtrade/policy/` | Probabilities → actions, risk limits | ✅ stage 3 |
 | `backtest/` | Event-driven walk-forward backtester | planned |
 | `paper/` | Live paper loop | planned |
 | `report/` | Metrics and daily Markdown summary | planned |
@@ -100,6 +100,51 @@ Rows without enough history (`max_lookback()` = 200 bars by default) contain
 NaN and are treated as "not ready", never filled. Look-ahead is tested two
 ways. First, features must not change when future candles are appended.
 Second, they must not change when future candles are perturbed.
+
+### 3. State, decision models, policy
+
+Each closed bar flows through the pipeline like this:
+
+```
+candles ─▶ features ─▶ build_state() ─▶ DecisionModel.decide() ─▶ Policy.evaluate() ─▶ Action
+                         (JSON text)       (probabilities only)     (all risk limits)
+```
+
+**State** (`state/builder.py`) is a compact JSON object: current features,
+volatility and return percentiles, and the last 24 bars of return, range and
+volume z-score. It contains no dates, prices, volumes or tickers. A test checks
+this: rescaling prices or volume, or shifting the series in time, must produce
+byte-identical text. The state targets fewer than 2,000 estimated tokens (it
+drops the oldest bars to fit) and is rejected above 32K.
+
+**Decision models** (`decision/`) answer configured questions with a
+probability per option. The default question is `direction`: up, flat or down
+over `horizon_bars`, where "flat" means within ±`flat_band_pct`.
+- `MockModel` is deterministic: its output is a hash of the state, with an
+  optional abstain rate or fixed outputs.
+- `BaselineModel` is an SMA crossover expressed through the same interface,
+  so it goes through the same policy.
+- `JevModel` is **not implemented yet**. `decision.model: jev` raises an
+  error until the TypeSafe API docs can be read.
+
+The `decisions` table logs every call with the input hash, input text, model
+version, raw output, latency, input tokens, estimated cost, and the policy's
+verdict.
+
+**Policy** (`policy/engine.py`) is long-only spot. It runs on bar close, and
+orders fill at the next bar's open.
+- **Entry** requires `p(up) ≥ entry_threshold` and
+  `p(up) − p(down) ≥ min_edge`. An abstain or a missing decision means no
+  trade.
+- **Size** is `risk_per_trade / stop_loss_pct`, capped by `max_position_frac`
+  and by the room left under `max_gross_exposure`.
+- **Exits** are checked in order: stop-loss on close, `max_holding_bars`,
+  then `p(down) ≥ exit_threshold`. The first two don't depend on the model.
+- **Blocks:** `max_daily_loss_pct` (measured from equity at the start of the
+  UTC day) blocks new entries for the rest of that day. After
+  `cooldown_after_losses` consecutive losses, entries pause for
+  `cooldown_bars`.
+- Every action records a reason string, including skips.
 
 ## Evaluation validity
 

@@ -11,6 +11,11 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+from .decision.base import DecisionConfig
+from .features.compute import FeatureConfig
+from .policy.engine import PolicyConfig
+from .state.builder import StateConfig
+
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "default.yaml"
 
 
@@ -38,6 +43,10 @@ class StorageConfig(BaseModel):
 class AppConfig(BaseModel):
     data: DataConfig = Field(default_factory=DataConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    features: FeatureConfig = Field(default_factory=FeatureConfig)
+    state: StateConfig = Field(default_factory=StateConfig)
+    decision: DecisionConfig = Field(default_factory=DecisionConfig)
+    policy: PolicyConfig = Field(default_factory=PolicyConfig)
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:
