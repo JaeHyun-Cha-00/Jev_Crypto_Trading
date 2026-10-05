@@ -13,7 +13,7 @@ retries) are logged with status "error" and asked again on a later run.
 
 The state text Jev was shown (a few KB per call, most of a decision line's
 size) goes to `<out>/state/<YYYY-MM-DD>.jsonl.gz` instead, keyed by `symbol`,
-`candle_ts` and `input_hash`. Each run appends one gzip member per symbol, so
+`candle_ts` and `input_hash`. Each run appends one gzip member, so
 the file only grows at the end and git stores each hour as a small delta.
 Decision lines written before this split still carry `state` inline.
 
@@ -287,36 +287,37 @@ class Collector:
         have_outcome = {(r["symbol"], r["candle_ts"]) for r in self.outcomes.read(oldest, latest)}
 
         res = CollectResult()
-        for sym in self.cfg.data.symbols:
-            # One coin's exchange error (delisted, rate limit) must not cost the
-            # rest of the pass; that coin is retried next hour.
-            try:
-                df = self.fetch(sym, latest)
-            except Exception as e:  # noqa: BLE001 - ccxt raises many types
-                log.warning("%s: candle fetch failed: %s", sym, e)
-                res.failed_symbols.append(sym)
-                continue
-            if df.empty:
-                log.warning("%s: no candles returned", sym)
-                continue
-            feats = compute_features(df, self.cfg.features)
-            pos = {int(ix.value // 1_000_000): i for i, ix in enumerate(df.index)}
-            states: list[dict] = []
-            try:
-                self._decide(sym, df, feats, pos, first, latest, done, logged, states, res)
-            finally:   # whatever was asked before a failure keeps its state
-                self.states.append(states)
-
-            for rec in logged:
-                key = (rec["symbol"], rec["candle_ts"])
-                if rec["symbol"] != sym or rec.get("status") == "error" or key in have_outcome:
+        # One gzip member per run: a member per call compresses about 2.5x worse.
+        states: list[dict] = []
+        try:
+            for sym in self.cfg.data.symbols:
+                # One coin's exchange error (delisted, rate limit) must not cost the
+                # rest of the pass; that coin is retried next hour.
+                try:
+                    df = self.fetch(sym, latest)
+                except Exception as e:  # noqa: BLE001 - ccxt raises many types
+                    log.warning("%s: candle fetch failed: %s", sym, e)
+                    res.failed_symbols.append(sym)
                     continue
-                out = outcome_record(rec, df, self.tf_ms, horizon, self.cfg.decision.flat_band_pct,
-                                     self.cfg.decision.adverse_move_pct)
-                if out is not None:
-                    self.outcomes.append(out)
-                    have_outcome.add(key)
-                    res.outcomes.append(key)
+                if df.empty:
+                    log.warning("%s: no candles returned", sym)
+                    continue
+                feats = compute_features(df, self.cfg.features)
+                pos = {int(ix.value // 1_000_000): i for i, ix in enumerate(df.index)}
+                self._decide(sym, df, feats, pos, first, latest, done, logged, states, res)
+
+                for rec in logged:
+                    key = (rec["symbol"], rec["candle_ts"])
+                    if rec["symbol"] != sym or rec.get("status") == "error" or key in have_outcome:
+                        continue
+                    out = outcome_record(rec, df, self.tf_ms, horizon, self.cfg.decision.flat_band_pct,
+                                         self.cfg.decision.adverse_move_pct)
+                    if out is not None:
+                        self.outcomes.append(out)
+                        have_outcome.add(key)
+                        res.outcomes.append(key)
+        finally:   # whatever was asked before a failure keeps its state
+            self.states.append(states)
         return res
 
     def _decide(self, sym: str, df: pd.DataFrame, feats, pos: dict[int, int], first: int, latest: int,
