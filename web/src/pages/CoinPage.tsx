@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { TIMEFRAMES, getForwardRows } from "./api";
-import type { Book, ForwardRow, JevPaper, Timeframe } from "./api";
-import { CandleChart } from "./CandleChart";
-import type { ChartLine, ChartMark } from "./CandleChart";
-import { TZ, fmtClock, fmtCompact, fmtDelta, fmtMoney, fmtSize, fmtPct, fmtPrice, fmtTime, fmtUsd } from "./format";
-import { useBook, useFills } from "./live";
-import type { FeedStatus, LiveCoin } from "./live";
-import { Coin, LivePrice, Star, tone } from "./ui";
+import { TIMEFRAMES, getForwardRows } from "../lib/api";
+import type { Book, ForwardRow, JevPaper, Timeframe } from "../lib/api";
+import { CandleChart } from "../components/CandleChart";
+import type { ChartLine, ChartMark } from "../components/CandleChart";
+import { TZ, fmtClock, fmtCompact, fmtDelta, fmtMoney, fmtSize, fmtPct, fmtPrice, fmtTime, fmtUsd } from "../lib/format";
+import { useBook, useFills } from "../lib/live";
+import type { FeedStatus, LiveCoin } from "../lib/live";
+import { Coin, LivePrice, Star, tone } from "../components/ui";
 
 // One coin, broker-app style: live price, candles, order book, trade tape, and
 // everything Jev has said and done about it.

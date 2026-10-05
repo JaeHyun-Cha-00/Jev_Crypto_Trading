@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from jevtrade.api.forward import ForwardLog, NotFound, join, metrics, parse_jsonl
-from jevtrade.api.settings import ForwardLogConfig
+from jevtrade.forward.log import ForwardLog, NotFound, join, metrics, parse_jsonl
+from jevtrade.forward.settings import ForwardLogConfig
 
 FIXTURE = Path(__file__).parent / "fixtures" / "forward"
 

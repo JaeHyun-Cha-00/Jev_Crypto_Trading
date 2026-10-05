@@ -47,12 +47,13 @@ class MultiSource(WindowedSource):
         return super().fetch_ohlcv(symbol, timeframe, since, limit)
 
 
-def _collector(tmp_path, transport, source=None, max_backfill=24, symbols=("BTC/USD", "ETH/USD"), start=None):
+def _collector(tmp_path, transport, source=None, max_backfill=24, symbols=("BTC/USD", "ETH/USD"), start=None,
+               quotes=None):
     cfg = load_config()
     cfg.data.symbols = list(symbols)
     cfg.forward_log.start = start   # the default fresh-start date is after the synthetic candles
     model = JevModel(JevConfig(max_retries=0), transport=transport, sleep=lambda s: None)
-    return Collector(cfg, model, source or MultiSource(), tmp_path, max_backfill=max_backfill)
+    return Collector(cfg, model, source or MultiSource(), tmp_path, max_backfill=max_backfill, quotes=quotes)
 
 
 def _now(last_closed_index: int) -> int:
@@ -219,16 +220,18 @@ def test_records_split_by_candle_day(tmp_path):
 
 
 def test_outcomes_logged_once_after_horizon(tmp_path):
+    h = load_config().decision.horizon_bars
     _collector(tmp_path, Transport(), max_backfill=1).run(_now(1200))
     assert not (tmp_path / "outcomes").exists() or not list((tmp_path / "outcomes").glob("*"))
-    for k in range(1201, 1206):
+    for k in range(1201, 1202 + h):
         _collector(tmp_path, Transport(), max_backfill=1).run(_now(k))
     outs = [json.loads(line) for p in (tmp_path / "outcomes").glob("*.jsonl")
             for line in p.read_text().splitlines()]
     keys = [(o["symbol"], o["candle_ts"]) for o in outs]
     assert len(keys) == len(set(keys))
-    # Decisions at 1200 and 1201 have closed their 4-bar horizon by candle 1205.
+    # Decisions at 1200 and 1201 have closed their h-bar horizon by candle 1201 + h.
     assert {ts for _, ts in keys} == {T0 + 1200 * H, T0 + 1201 * H}
+    assert {o["horizon_bars"] for o in outs} == {h}
 
 
 def test_outcome_labels():
@@ -265,3 +268,27 @@ def test_each_run_writes_one_gzip_member(tmp_path):
     d = zlib.decompressobj(16 + zlib.MAX_WBITS)
     assert len(d.decompress(p.read_bytes()).splitlines()) == 2
     assert d.eof and d.unused_data == b""   # nothing after the first member
+
+
+def test_robinhood_quote_goes_on_the_newest_candle_only(tmp_path):
+    asked = []
+
+    def quotes(symbols):
+        asked.append(symbols)
+        return {"BTC/USD": {"bid": 99.0, "ask": 101.0}}
+
+    _collector(tmp_path, Transport(), max_backfill=3, quotes=quotes).run(_now(N - 2))
+    assert asked == [["BTC/USD", "ETH/USD"]]   # one quote call per run
+    recs = _decisions(tmp_path)
+    quoted = [r for r in recs if "rh_bid" in r]
+    newest = max(r["candle_ts"] for r in recs)
+    assert [(r["symbol"], r["candle_ts"]) for r in quoted] == [("BTC/USD", newest)]
+    assert quoted[0]["rh_ask"] == 101.0 and quoted[0]["rh_quote_at"].endswith("Z")
+
+
+def test_robinhood_outage_never_stops_a_run(tmp_path):
+    def quotes(symbols):
+        raise OSError("robinhood down")
+
+    res = _collector(tmp_path, Transport(), max_backfill=2, quotes=quotes).run(_now(N - 2))
+    assert len(res.called) == 4 and not any("rh_bid" in r for r in _decisions(tmp_path))

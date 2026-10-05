@@ -2,9 +2,9 @@
 
 import pytest
 
-from jevtrade.api.forward import join
-from jevtrade.api.jev_paper import replay
-from jevtrade.api.settings import JevPaperConfig
+from jevtrade.forward.log import join
+from jevtrade.forward.portfolio import replay
+from jevtrade.forward.settings import JevPaperConfig
 from jevtrade.config import AppConfig
 
 H = 3_600_000
@@ -163,7 +163,7 @@ def test_close_only_rows_still_open_at_the_previous_close():
 
 
 def test_a_late_fill_only_sees_part_of_the_hours_dip():
-    from jevtrade.api.jev_paper import Bar, _fill_bar
+    from jevtrade.forward.portfolio import Bar, _fill_bar
     bar = Bar(100.0, 110.0, 90.0, 100.0)
     rest = _fill_bar(bar, 0, int(0.75 * H), H)
     assert rest.open == 100.0 and rest.low == pytest.approx(97.5) and rest.high == pytest.approx(102.5)
@@ -187,6 +187,25 @@ def test_robinhood_spread_is_paid_on_both_sides_and_wider_for_thin_coins():
     assert r["spread_bps"] == {"min": 95, "max": 115}
 
 
+def test_logged_robinhood_quotes_replace_the_spread_estimate():
+    cfg = AppConfig()   # estimate would be 95-115bps
+    rows = [_ohlc(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), 100.0, 100.0, 100.0, 1e6)]
+    rows += [_ohlc(row("BTC/USD", i, 100.0), 100.0, 100.0, 100.0, 1e6) for i in range(1, 6)]
+    rows[0].update(rh_bid=99.5, rh_ask=100.5)   # 50bps per side, carried forward to later fills
+    rows[3].update(rh_bid=99.0, rh_ask=101.0)   # 100bps from hour 3 on
+    r = run(rows, cfg)
+    t = r["trades"][0]
+    assert t["entry_price"] == pytest.approx(100.5)
+    assert t["exit_price"] == pytest.approx(99.0)
+    assert r["spread_source"] == "robinhood" and r["quoted_symbols"] == 1
+    assert r["spread_bps"] == {"min": pytest.approx(100), "max": pytest.approx(100)}
+
+
+def test_without_quotes_the_estimate_is_reported():
+    r = run([row("BTC/USD", 0, 100.0)], AppConfig())
+    assert r["spread_source"] == "estimate" and r["quoted_symbols"] == 0
+
+
 def test_spread_scales_on_log_volume():
     c = JevPaperConfig()
     assert c.spread_for(5e6) == c.spread_for(5e9) == 95
@@ -205,3 +224,91 @@ def test_buys_are_capped_at_a_share_of_hourly_dollar_volume():
     cfg.jev_paper.max_volume_frac = None
     [p] = run(rows, cfg)["positions"]
     assert p["qty"] * p["entry_price"] == pytest.approx(10_000 / 3, rel=1e-3)
+
+
+def gated(lookback, min_signals):
+    """Old costs, no time exit, a wide stop, and the skill gate on (horizon: 4 bars)."""
+    cfg = old_costs()
+    cfg.jev_paper.gate_lookback_hours = lookback
+    cfg.jev_paper.gate_min_signals = min_signals
+    cfg.policy = cfg.policy.model_copy(update={"max_holding_bars_by_model": {"jev": None},
+                                               "stop_loss_pct": 0.5})
+    return cfg
+
+
+def test_skill_gate_waits_for_enough_resolved_signals():
+    rows = [row("BTC/USD", i, 100.0 + i, up=0.7, down=0.0) for i in range(8)]
+    r = run(rows, gated(24, 1000))
+    assert r["buys"] == [] and r["positions"] == [] and r["pending"] == []
+    blocked = [a for a in r["actions"] if a["reason"].startswith("skill_gate")]
+    assert len(blocked) == 8 and "of 1000 buy signals" in blocked[0]["reason"]
+    assert r["gate"]["open"] is False and r["gate"]["signals"] == 4   # hours 0-3 resolved by hour 7
+
+
+def test_skill_gate_opens_once_signals_paid_and_beat_the_average_coin():
+    rows = [row("BTC/USD", i, 100.0 + 2 * i, up=0.7, down=0.0) for i in range(8)]
+    rows += [row("ETH/USD", i, 50.0) for i in range(8)]   # flat: the average coin rose less than BTC
+    r = run(rows, gated(24, 2))
+    # Hour 0's and 1's signals resolve at hours 4 and 5: the first buy waits for hour 5.
+    assert [(b["symbol"], b["bar_ts"]) for b in r["buys"]] == [("BTC/USD", T0 + 5 * H)]
+    assert all(a["reason"].startswith("skill_gate") for a in r["actions"]
+               if a["symbol"] == "BTC/USD" and a["bar_ts"] < T0 + 5 * H)
+    g = r["gate"]
+    assert g["open"] is True and g["avg_net"] > 0 and g["avg_excess"] > 0
+
+
+def test_skill_gate_stays_closed_when_signals_lost_money():
+    rows = [row("BTC/USD", i, 100.0 - 2 * i, up=0.7, down=0.0) for i in range(10)]
+    rows += [row("ETH/USD", i, 50.0) for i in range(10)]
+    r = run(rows, gated(24, 1))
+    assert r["buys"] == []
+    assert "after costs" in r["gate"]["reason"] and r["gate"]["avg_net"] < 0
+
+
+def test_skill_gate_never_blocks_a_sale():
+    # Signals pay early (gate opens, BTC is bought), then lose (gate closes); Jev's later
+    # "down" answer still sells the coin.
+    closes = [100, 102, 104, 106, 108, 110, 100, 98, 96, 94, 92]
+    rows = [row("BTC/USD", i, float(c), up=0.7, down=0.0) for i, c in enumerate(closes[:9])]
+    rows += [row("BTC/USD", 9, 94.0, up=0.0, down=0.7), row("BTC/USD", 10, 92.0)]
+    rows += [row("ETH/USD", i, 50.0) for i in range(11)]
+    r = run(rows, gated(5, 1))
+    assert [b["bar_ts"] for b in r["buys"]] == [T0 + 4 * H]
+    [t] = r["trades"]
+    assert t["exit_reason"].startswith("model_exit") and t["exit_ts"] == T0 + 10 * H
+    assert r["gate"]["open"] is False
+
+
+def test_hours_show_each_hours_picks_what_the_account_did_and_how_they_did():
+    rows = [row("BTC/USD", 0, 100.0, up=0.7, down=0.0), row("SOL/USD", 0, 20.0, up=0.6, down=0.2)]
+    rows += [row("BTC/USD", i, 100.0 + i) for i in range(1, 6)]
+    rows += [row("SOL/USD", i, 20.0) for i in range(1, 6)]
+    rows += [row("ETH/USD", i, 50.0, status="error" if i == 0 else "answered") for i in range(6)]
+    r = run(rows)
+    assert [h["bar_ts"] for h in r["hours"]] == [T0 + i * H for i in range(5, -1, -1)]   # newest first
+    h = r["hours"][-1]
+    assert (h["asked"], h["answered"]) == (3, 2)
+    assert [p["symbol"] for p in h["picks"]] == ["BTC/USD", "SOL/USD"]   # highest p(up) first
+    btc, sol = h["picks"]
+    assert btc["action"] == "enter" and btc["why"] == "entry" and h["bought"] == ["BTC/USD", "SOL/USD"]
+    # Resolved at hour 4 (horizon 4): BTC rose 4%, SOL and ETH were flat.
+    assert btc["ret"] == pytest.approx(0.04) and btc["net"] == pytest.approx(0.04 - 2 * 12 / 10_000)
+    assert sol["ret"] == 0.0 and h["market"] == pytest.approx(0.04 / 3)
+    assert h["resolves_at"] == T0 + 4 * H
+    later = r["hours"][0]   # hour 5: no picks, horizon still open
+    assert later["picks"] == [] and later["market"] is None and later["bought"] == []
+
+
+def test_hours_list_picks_the_skill_gate_held_back():
+    rows = [row("BTC/USD", i, 100.0 + i, up=0.7, down=0.0) for i in range(8)]
+    r = run(rows, gated(24, 1000))
+    assert all(h["held_back"] == 1 and h["bought"] == [] for h in r["hours"])
+    [p] = r["hours"][0]["picks"]
+    assert (p["symbol"], p["action"], p["why"]) == ("BTC/USD", "skip", "skill_gate")
+
+
+def test_an_hour_the_collector_skipped_still_gets_a_row():
+    rows = [row("BTC/USD", i, 100.0) for i in (0, 1, 3)]
+    r = run(rows)
+    assert [(h["bar_ts"], h["asked"]) for h in r["hours"]] == [(T0 + 3 * H, 1), (T0 + 2 * H, 0), (T0 + H, 1), (T0, 1)]
+    assert r["hours"][1]["picks"] == [] and r["hours"][1]["market"] is None

@@ -36,11 +36,6 @@ class FakeSource:
         return rows[: limit or 500]
 
 
-@pytest.fixture
-def candles_500():
-    return synthetic_candles(500)
-
-
 class WindowedSource(FakeSource):
     """Coinbase-style source: each request returns only candles inside the
     window [since, since + (limit - 1) * tf], capped at `cap` candles. Full
@@ -63,4 +58,4 @@ def _no_github(monkeypatch):
     """The forward-log loader must never reach the network in tests."""
     def refuse(url, headers, timeout_s):
         raise OSError(f"network disabled in tests: {url}")
-    monkeypatch.setattr("jevtrade.api.forward._http_get", refuse)
+    monkeypatch.setattr("jevtrade.net.get", refuse)

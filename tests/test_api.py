@@ -112,8 +112,8 @@ def test_missing_database_is_503(tmp_path):
 
 
 def test_forward_routes_with_github_mocked(env, monkeypatch):
-    from jevtrade.api.forward import ForwardLog
-    from jevtrade.api.settings import ForwardLogConfig
+    from jevtrade.forward.log import ForwardLog
+    from jevtrade.forward.settings import ForwardLogConfig
     from test_forward import FakeGitHub
 
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
@@ -153,8 +153,8 @@ def test_forward_off(env):
 
 
 def test_forward_paper_replays_logged_answers(env):
-    from jevtrade.api.forward import ForwardLog
-    from jevtrade.api.settings import ForwardLogConfig
+    from jevtrade.forward.log import ForwardLog
+    from jevtrade.forward.settings import ForwardLogConfig
     from test_forward import FakeGitHub
 
     cfg, _ = env
@@ -164,14 +164,15 @@ def test_forward_paper_replays_logged_answers(env):
     assert r["initial_equity"] == cfg.paper.initial_equity and r["last_bar_ts"] is not None
     assert {a["symbol"] for a in r["actions"]} <= {"BTC/USD", "ETH/USD"}
     assert len(c.get("/api/forward/paper", params={"actions": 1}).json()["actions"]) == 1
+    assert len(c.get("/api/forward/paper", params={"hours": 1}).json()["hours"]) == 1
     assert c.post("/api/forward/paper").status_code == 405
 
 
 def test_forward_starts_at_start(env):
     from datetime import datetime, timezone
 
-    from jevtrade.api.forward import ForwardLog
-    from jevtrade.api.settings import ForwardLogConfig
+    from jevtrade.forward.log import ForwardLog
+    from jevtrade.forward.settings import ForwardLogConfig
     from test_forward import FakeGitHub
 
     cfg, _ = env
@@ -194,7 +195,7 @@ def test_forward_starts_at_start(env):
 
 
 def test_start_reads_naive_and_zoned_times():
-    from jevtrade.api.settings import ForwardLogConfig
+    from jevtrade.forward.settings import ForwardLogConfig
 
     assert ForwardLogConfig().start_ms() is None
     z = ForwardLogConfig(start="2026-10-05T07:00:00Z").start_ms()

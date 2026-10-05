@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { get, getForwardRows, getForwardSummary, getJevPaper } from "./api";
-import type { Config, ForwardRow, ForwardSummary, JevPaper } from "./api";
-import { CoinPage } from "./CoinPage";
-import { EquityChart } from "./EquityChart";
-import { ForwardLog } from "./ForwardLog";
-import { TZ, TZ_NAME, ago, fmtMoney, fmtPct, fmtPrice, fmtTime } from "./format";
-import { useLiveMarket, useWatchlist } from "./live";
-import type { FeedStatus } from "./live";
-import { MarketView } from "./Market";
-import type { JevCoin } from "./Market";
-import { Coin, tone } from "./ui";
+import { get, getForwardRows, getForwardSummary, getJevPaper } from "./lib/api";
+import type { Config, ForwardRow, ForwardSummary, JevHour, JevPaper } from "./lib/api";
+import { CoinPage } from "./pages/CoinPage";
+import { EquityChart } from "./components/EquityChart";
+import { ForwardLog } from "./pages/ForwardLog";
+import { TZ, TZ_NAME, ago, fmtMoney, fmtPct, fmtPrice, fmtTime } from "./lib/format";
+import { useLiveMarket, useWatchlist } from "./lib/live";
+import type { FeedStatus } from "./lib/live";
+import { MarketView } from "./pages/Market";
+import type { JevCoin } from "./pages/Market";
+import { Coin, tone } from "./components/ui";
 
 // Two views. Market: every tracked coin live from Coinbase, broker-app style, with
 // a page per coin. Jev: its hourly forward calls (collect workflow, data-log branch)
@@ -170,7 +170,8 @@ function Bought({ paper, symbol }: { paper: JevPaper | null; symbol: string }) {
       {count === 0 ? (
         <p className="muted">
           Jev hasn't bought anything{symbol ? ` on ${symbol}` : ""} yet. It buys when p(up) is at least{" "}
-          {paper?.policy.entry_threshold ?? 0.55} and beats p(down) by {paper?.policy.min_edge ?? 0.1}.
+          {paper?.policy.entry_threshold ?? 0.55} and beats p(down) by {paper?.policy.min_edge ?? 0.1}
+          {paper?.gate ? ", while the skill gate is open" : ""}.
         </p>
       ) : (
         <div className="scroll"><table>
@@ -222,11 +223,122 @@ function Bought({ paper, symbol }: { paper: JevPaper | null; symbol: string }) {
   );
 }
 
+/** Why the account passed on a pick, from the first word of the policy's reason. */
+const PASSED: Record<string, string> = {
+  hold: "already held", skill_gate: "held back by the skill gate", no_capacity: "not bought: no room left",
+  max_daily_loss: "not bought: daily loss limit", cooldown: "not bought: cooling down after losses",
+  min_trade_interval: "not bought: sold too recently",
+};
+
+const ticker = (s: string) => s.split("/")[0];
+/** "MM-DD HH:mm" local, for times inside a row. */
+const fmtShort = (ms: number) => fmtTime(ms).slice(5);
+
+/** What the account did in one hour, for the coins shown. */
+function didThisHour(h: JevHour, picks: JevHour["picks"], symbol: string): string[] {
+  const out: string[] = [];
+  const bought = h.bought.filter((s) => !symbol || s === symbol);
+  if (bought.length) out.push(`Bought ${bought.map(ticker).join(", ")}`);
+  for (const s of h.sold) if (!symbol || s.symbol === symbol) out.push(`Sold ${ticker(s.symbol)} (${s.why.replace(/_/g, " ")})`);
+  const passed = new Map<string, number>();
+  for (const p of picks) {
+    if (p.action === "enter" || !p.why) continue;
+    const label = PASSED[p.why] ?? p.why.replace(/_/g, " ");
+    passed.set(label, (passed.get(label) ?? 0) + 1);
+  }
+  for (const [label, n] of passed) out.push(`${n} ${label}`);
+  return out;
+}
+
+const PICKS_SHOWN = 8;
+
+/** Jev's picks hour by hour, bought or not, and how they did once the question's horizon closed. */
+function Hours({ paper, symbol, horizon }: { paper: JevPaper | null; symbol: string; horizon: number }) {
+  const [open, setOpen] = useState<Set<number>>(() => new Set());
+  const hours = paper?.hours ?? [];
+  const pol = paper?.policy;
+  if (hours.length === 0) return <p className="muted">No hours logged yet.</p>;
+  return (
+    <>
+      <p className="muted small hours-note">
+        Every hour Jev is asked about each coin. Its picks are the coins with p(up) ≥ {pol?.entry_threshold} and
+        p(up) − p(down) ≥ {pol?.min_edge}{paper?.gate ? "; the account buys them only while the skill gate is open" : ""}.
+        After {horizon} hours each hour shows how its picks did, before and after a round trip of costs, next to the average coin.
+      </p>
+      <div className="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Hour ({TZ})</th><th>Jev's picks, p(up)</th><th>What the account did</th>
+              <th className="num">Picks after {horizon}h</th><th className="num">Average coin</th>
+            </tr>
+          </thead>
+          <tbody>
+            {hours.map((h) => {
+              const picks = h.picks.filter((p) => !symbol || p.symbol === symbol);
+              const done = picks.filter((p) => p.ret != null && p.net != null);
+              const avg = (k: "ret" | "net") => done.reduce((s, p) => s + (p[k] ?? 0), 0) / done.length;
+              const did = didThisHour(h, picks, symbol);
+              const later = <span className="muted" title={`known at ${fmtTime(h.resolves_at)} ${TZ}`}>after {fmtShort(h.resolves_at)}</span>;
+              const all = open.has(h.bar_ts) || picks.length <= PICKS_SHOWN + 1;
+              return (
+                <tr key={h.bar_ts}>
+                  <td>
+                    {fmtShort(h.bar_ts)}
+                    {h.asked > 0 && <div className="at small" title="coins Jev answered / coins asked">{h.answered}/{h.asked} answered</div>}
+                  </td>
+                  <td className="picks-cell">
+                    {!h.asked ? (
+                      <span className="muted">Not asked: the hourly run skipped this hour</span>
+                    ) : picks.length === 0 ? (
+                      <span className="muted">{symbol ? "Not picked" : "None"}</span>
+                    ) : (
+                      <span className="picks">
+                        {(all ? picks : picks.slice(0, PICKS_SHOWN)).map((p) => (
+                          <span
+                            key={p.symbol}
+                            className={`pick ${tone(p.ret) ?? ""}`}
+                            title={`${p.symbol}: p(up) ${p.p_up.toFixed(2)}, p(down) ${p.p_down.toFixed(2)}` +
+                              (p.ret != null ? `; ${fmtPct(p.ret)} after ${horizon} hours` : "")}
+                          >
+                            {ticker(p.symbol)} <span className="p">{p.p_up.toFixed(2)}</span>
+                          </span>
+                        ))}
+                        {!all && (
+                          <button className="pick more" onClick={() => setOpen(new Set(open).add(h.bar_ts))}>
+                            +{picks.length - PICKS_SHOWN} more
+                          </button>
+                        )}
+                      </span>
+                    )}
+                  </td>
+                  <td className="reason">{did.length ? did.join(" · ") : <span className="muted">{h.asked ? "Nothing" : "–"}</span>}</td>
+                  <td className="num">
+                    {done.length ? (
+                      <>
+                        <span className={tone(avg("ret"))}>{fmtPct(avg("ret"))}</span>
+                        <div className="at small">{fmtPct(avg("net"))} after costs</div>
+                      </>
+                    ) : picks.length ? later : "–"}
+                  </td>
+                  <td className="num">
+                    {h.market != null ? <span className={tone(h.market)}>{fmtPct(h.market)}</span> : h.asked ? later : "–"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
 /** Jev's paper portfolio and forward log, as before. */
 function JevView({ data }: { data: Data }) {
   const [range, setRange] = useState<RangeId>("all");
   const [symbol, setSymbol] = useState<string>("");
-  const [activity, setActivity] = useState<"buys" | "trades" | "calls">("buys");
+  const [activity, setActivity] = useState<"hours" | "buys" | "trades" | "calls">("hours");
 
   const { config, paper, summary } = data;
   const curve = paper?.curve ?? [];
@@ -245,6 +357,7 @@ function JevView({ data }: { data: Data }) {
   const wins = closed.filter((t) => t.pnl > 0).length;
   const realized = closed.reduce((s, t) => s + t.pnl, 0);
   const pol = paper?.policy;
+  const gate = paper?.gate;
 
   const first = equity[0]?.equity;
   const last = equity[equity.length - 1]?.equity;
@@ -311,10 +424,18 @@ function JevView({ data }: { data: Data }) {
         </div>
         <EquityChart points={equity} initial={paper?.initial_equity ?? 10_000} />
         <p className="caveat small" role="note">
-          <span aria-hidden="true">▲</span> Likely better than real trading. Prices are Coinbase hourly candles with an
-          estimated Robinhood spread, not real Robinhood quotes. Hours logged before candle highs and lows were
+          <span aria-hidden="true">▲</span> Likely better than real trading. Prices are Coinbase hourly candles with
+          {paper?.spread_source === "robinhood"
+            ? " the spread Robinhood quoted each hour (an estimate for coins with no quote logged yet), not Robinhood's own prices."
+            : " an estimated Robinhood spread, not real Robinhood quotes."} Hours logged before candle highs and lows were
           recorded only check the{pol ? ` ${fmtPct(pol.stop_loss_pct, false)}` : ""} stop-loss on closes.
         </p>
+        {gate && !gate.open && (
+          <p className="muted small" role="status">
+            Not buying for now: the skill gate is closed until Jev's recent buy signals make money after costs and beat the
+            average coin. Held coins still sell on Jev's answer and the stop.
+          </p>
+        )}
         <p className="muted small">
           Jev's own hourly answers run through the trading rules · {symbols.length > 4 ? `${symbols.length} coins` : symbols.join(", ") || "no coins yet"} ·
           simulated fills, never real orders
@@ -362,8 +483,20 @@ function JevView({ data }: { data: Data }) {
           <h2>Trading rules</h2>
           {pol && (
             <dl className="kv">
-              <dt>Buy when</dt><dd>p(up) ≥ {pol.entry_threshold} and p(up) − p(down) ≥ {pol.min_edge}</dd>
-              <dt>Sell when</dt><dd>p(down) ≥ {pol.exit_threshold}, the stop, or {pol.max_holding_bars ?? "no"} hours held</dd>
+              <dt>Buy when</dt><dd>p(up) ≥ {pol.entry_threshold} and p(up) − p(down) ≥ {pol.min_edge}{gate ? ", while the skill gate is open" : ""}</dd>
+              {gate && (
+                <>
+                  <dt>Skill gate</dt>
+                  <dd>
+                    <span className={`pill ${gate.open ? "up" : ""}`}>{gate.open ? "Open" : "Closed"}</span>{" "}
+                    Buys only while Jev's buy signals from the last {gate.lookback_hours / 24} days made money after costs and beat the average coin
+                    {gate.avg_net != null && gate.avg_excess != null
+                      ? ` (now ${fmtPct(gate.avg_net)} after costs, ${fmtPct(gate.avg_excess)} vs the average coin, ${gate.signals} signals).`
+                      : ` (${gate.signals} of ${gate.min_signals} signals resolved so far).`}
+                  </dd>
+                </>
+              )}
+              <dt>Sell when</dt><dd>p(down) ≥ {pol.exit_threshold}{pol.exit_min_edge ? ` and p(down) − p(up) ≥ ${pol.exit_min_edge}` : ""}, or the stop{pol.max_holding_bars != null ? `, or ${pol.max_holding_bars} hours held` : ""}</dd>
               <dt>Stop-loss</dt><dd>{fmtPct(pol.stop_loss_pct, false)}</dd>
               {config && (
                 <>
@@ -378,7 +511,10 @@ function JevView({ data }: { data: Data }) {
               <dt>Costs</dt><dd>
                 {paper.fee_bps ? `${paper.fee_bps} bps fee + ` : "No fee, "}
                 {fmtPct(paper.spread_bps.min / 10_000, false)}–{fmtPct(paper.spread_bps.max / 10_000, false)} spread per side
-                {paper.slippage_bps ? ` + ${paper.slippage_bps} bps slippage` : ""} (Robinhood-like; wider for thin coins)
+                {paper.slippage_bps ? ` + ${paper.slippage_bps} bps slippage` : ""}
+                {paper.spread_source === "robinhood"
+                  ? ` (Robinhood's latest quotes for ${paper.quoted_symbols} coins)`
+                  : " (Robinhood-like estimate; wider for thin coins)"}
               </dd>
             </dl>
           )}
@@ -393,14 +529,16 @@ function JevView({ data }: { data: Data }) {
         <div className="card-head">
           <h2>Jev's activity</h2>
           <div className="seg" role="tablist" aria-label="Activity">
-            {(["buys", "trades", "calls"] as const).map((k) => (
+            {(["hours", "buys", "trades", "calls"] as const).map((k) => (
               <button key={k} role="tab" aria-selected={activity === k} className={activity === k ? "on" : ""} onClick={() => setActivity(k)}>
-                {k === "buys" ? "Buys" : k === "trades" ? "Trades" : "Every call"}
+                {k === "hours" ? "By hour" : k === "buys" ? "Buys" : k === "trades" ? "Trades" : "Every call"}
               </button>
             ))}
           </div>
         </div>
-        {activity === "trades" ? (
+        {activity === "hours" ? (
+          <Hours paper={paper} symbol={symbol} horizon={config?.horizon_bars ?? 24} />
+        ) : activity === "trades" ? (
           trades.length === 0 ? (
             <p className="muted">No closed trades yet.</p>
           ) : (
@@ -427,9 +565,11 @@ function JevView({ data }: { data: Data }) {
           )
         ) : (activity === "buys" ? buys : actions).length === 0 ? (
           <p className="muted">
-            {activity === "buys"
-              ? `No buys yet. Jev's p(up) hasn't reached ${pol?.entry_threshold ?? 0.55} with enough edge${symbol ? ` on ${symbol}` : ""}.`
-              : "No calls yet."}
+            {activity !== "buys"
+              ? "No calls yet."
+              : gate && !gate.open
+                ? `No buys yet${symbol ? ` on ${symbol}` : ""}: the skill gate is closed, so Jev's picks aren't bought. By hour shows them.`
+                : `No buys yet. Jev's p(up) hasn't reached ${pol?.entry_threshold ?? 0.55} with enough edge${symbol ? ` on ${symbol}` : ""}.`}
           </p>
         ) : (
           <div className="scroll">

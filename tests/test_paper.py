@@ -10,7 +10,7 @@ from jevtrade.backtest import BacktestConfig, Backtester
 from jevtrade.config import AppConfig
 from jevtrade.data.store import CandleStore, connect
 from jevtrade.decision.mock import MockModel
-from jevtrade.paper import PaperLock, PaperLockError, PaperStore, PaperTrader
+from jevtrade.paper import PaperLock, PaperLockError, PaperTrader
 from jevtrade.paper.engine import seconds_until_next_close
 
 from conftest import H, T0, synthetic_candles

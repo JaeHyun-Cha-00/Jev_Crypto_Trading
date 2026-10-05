@@ -13,7 +13,9 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .api.settings import ApiConfig, ForwardLogConfig, JevPaperConfig, MarketConfig
+from .api.settings import ApiConfig
+from .data.market import MarketConfig
+from .forward.settings import ForwardLogConfig, JevPaperConfig
 from .backtest.engine import BacktestConfig
 from .decision.base import DecisionConfig
 from .features.compute import FeatureConfig
@@ -41,6 +43,11 @@ class DataConfig(BaseModel):
     # pages back through full hourly history; kraken serves only ~30 days.
     exchange: str = "coinbaseexchange"
     symbols: list[str] = Field(default_factory=lambda: ["BTC/USD", "ETH/USD"])
+    # Track every Robinhood-tradable, non-stablecoin coin with an online Coinbase
+    # USD market instead, read at the start of each run (jevtrade.data.live);
+    # `symbols` is then the fallback and sets the order of the coins it names.
+    symbols_live: bool = False
+    exclude: list[str] = Field(default_factory=list)   # never tracked, even when listed live
     timeframe: str = "1h"
     # Earliest candle to keep (ISO-8601, UTC). Deep-history exchanges backfill to it.
     start: str = "2025-01-01T00:00:00Z"

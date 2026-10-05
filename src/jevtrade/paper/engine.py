@@ -1,6 +1,6 @@
 """Live paper loop: process each newly closed candle exactly once.
 
-Designed to run unattended on your own machine or a small VM (see README),
+Designed to run unattended on your own machine or a small VM (see docs/stages.md),
 not in a hosted notebook or chat session. Every step:
 
 1. Syncs public candles up to the last closed bar (public endpoints only).
