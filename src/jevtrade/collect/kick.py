@@ -1,9 +1,11 @@
 """Hourly backstop for the collect workflow's GitHub schedule.
 
 GitHub may delay or skip scheduled runs. This loop, run next to the API on an
-always-on box, wakes at minute `--minute` of every hour, asks GitHub whether a
+always-on box, asks GitHub from minute `--minute` of every hour on whether a
 collect run already started this hour, and starts one with workflow_dispatch
-only if none did. It calls nothing but the GitHub API; the run itself (and
+only if none did. It re-checks the clock every few minutes, so an hour is
+still covered when the box slept through `--minute` or the container restarted
+after it. It calls nothing but the GitHub API; the run itself (and
 every Jev call) happens in GitHub Actions, as with the schedule.
 
     python -m jevtrade.collect.kick [--minute 20] [--once]
@@ -97,21 +99,37 @@ def main() -> None:
     run(Kicker(cfg.forward_log.repo, token, args.ref), args.minute, once=args.once)
 
 
-def run(k: Kicker, minute: int = 20, once: bool = False) -> None:
-    """Check at `minute` past every hour, forever (or once, now). Errors are logged and
-    retried next hour; with `once` they exit non-zero."""
-    while True:
-        if not once:
-            wake = next_wake(datetime.now(timezone.utc), minute)
-            time.sleep(max(0.0, (wake - datetime.now(timezone.utc)).total_seconds()))
+def run(k: Kicker, minute: int = 20, once: bool = False, poll_min: float = 5,
+        clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        sleep: Callable[[float], None] = time.sleep) -> None:
+    """From `minute` past every hour on, make sure a collect run started that hour
+    (or check once, now, with `once`).
+
+    Wakes every `poll_min` minutes and reads the wall clock each time, so a box
+    that was asleep, or a container restarted after `minute`, still covers the
+    hour instead of waiting for the next one. An hour is done after one
+    successful check; errors are logged and retried at the next wake."""
+    if once:
         try:
-            log.info("%s", k.tick(datetime.now(timezone.utc)))
-        except Exception as e:  # noqa: BLE001 - keep the loop alive; next hour tries again
+            log.info("%s", k.tick(clock()))
+        except Exception as e:  # noqa: BLE001
             log.warning("kick failed: %s", e)
-            if once:
-                raise SystemExit(1) from e
-        if once:
-            return
+            raise SystemExit(1) from e
+        return
+    done: datetime | None = None
+    while True:
+        now = clock()
+        hour = now.replace(minute=0, second=0, microsecond=0)
+        if hour != done and now.minute >= minute:
+            try:
+                log.info("%s", k.tick(now))
+                done = hour
+            except Exception as e:  # noqa: BLE001 - keep the loop alive; the next wake tries again
+                log.warning("kick failed: %s", e)
+        now = clock()
+        wake = min(next_wake(now, minute), now + timedelta(minutes=poll_min))
+        sleep(max(1.0, (wake - now).total_seconds()))
+
 
 if __name__ == "__main__":
     main()
