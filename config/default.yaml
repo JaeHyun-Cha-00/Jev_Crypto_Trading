@@ -1,0 +1,12 @@
+# Default configuration. Secrets do NOT belong here — use environment
+# variables (see .env.example).
+
+data:
+  exchange: binance          # any ccxt exchange id with public OHLCV
+  symbols: [BTC/USDT, ETH/USDT]
+  timeframe: 1h
+  start: "2024-01-01T00:00:00Z"
+  page_limit: 1000
+
+storage:
+  sqlite_path: data/jevtrade.sqlite
