@@ -25,9 +25,9 @@ trade, and when to exit. All risk limits live in code, never in prompts.
 | `src/jevtrade/policy/` | Probabilities → actions, risk limits | ✅ stage 3 |
 | `src/jevtrade/backtest/` | Event-driven walk-forward backtester | ✅ stage 4 |
 | `src/jevtrade/paper/` | Live paper loop, restart-safe, simulated fills only | ✅ stage 7 |
-| `report/` | Metrics and daily Markdown summary | planned |
-| `api/` | Read-only FastAPI | planned |
-| `web/` | React dashboard | planned |
+| `src/jevtrade/report/` | Daily Markdown report: account, trades, decisions, calibration | ✅ stage 8 |
+| `src/jevtrade/api/` | Read-only FastAPI over the store and reports | ✅ stage 9 |
+| `web/` | React dashboard over the API | ✅ stage 10 |
 
 ## Setup
 
@@ -35,7 +35,7 @@ Requires Python 3.11 or newer.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e '.[dev]'
+pip install -e '.[dev]'   # or '.[api]' for just the runtime plus the API server
 cp .env.example .env   # only needed once the JevModel stage lands
 pytest
 ```
@@ -287,6 +287,84 @@ User=jevtrade
 [Install]
 WantedBy=multi-user.target
 ```
+
+### 8. Daily report
+
+```bash
+python -m jevtrade.report                    # yesterday (UTC) for paper.run_id
+python -m jevtrade.report --day 2026-10-04   # a given day
+python -m jevtrade.report --run-id <backtest run id> --day 2026-10-04   # calibration of a backtest
+```
+
+Writes `reports/out/<run id>/<day>.md` and a `.json` twin, built only from
+the SQLite store, so rewriting a day gives the same file. The paper loop
+writes each day's report right after that day's last bar
+(`paper.daily_report`). A report has:
+- **Account:** equity at the day's open and close, day PnL, return since
+  start, max drawdown, bars processed (and any risk-only catch-up bars).
+- **Trades** closed that day, and **open positions** with stop, mark and
+  unrealized PnL.
+- **Decisions:** counts, abstains, actions, skip reasons, Jev cost, tokens
+  and latency.
+- **Calibration** of the `direction` probabilities against what happened
+  `horizon_bars` later, over every resolved decision of the run so far:
+  Brier score next to the Brier of always forecasting the realized base
+  rates (the bar to beat), log loss, top-choice hit rate, and a
+  reliability table for p(up).
+
+On Coinbase BTC/ETH since 2025, about 75% of 4-hour windows ended "flat"
+(within ±1%), and up and down were about 12.5% each. A model that rarely
+says flat is badly calibrated even if its up/down calls are informative.
+
+### 9. API (read-only)
+
+```bash
+python -m jevtrade.api                  # http://127.0.0.1:8000, docs at /docs
+```
+
+Every route is a `GET`, and the database is opened with SQLite's
+`mode=ro`, so the API can't write, place orders, or call the model. It is
+safe to run next to the paper loop. Keep it on localhost or behind a
+firewall or VPN; it has no authentication.
+
+| Route | Returns |
+|---|---|
+| `/api/health` | database present, paper heartbeat |
+| `/api/config` | symbols, model, sizing and risk limits (no secrets) |
+| `/api/paper/status` | equity, cash, return, drawdown, open positions with unrealized PnL, pending orders, risk state |
+| `/api/paper/equity?since=&limit=` | equity, cash and exposure per bar |
+| `/api/paper/trades?symbol=&limit=` | closed paper trades, newest first |
+| `/api/decisions?symbol=&before=&limit=` | model probabilities and the policy's verdict per bar |
+| `/api/decisions/{id}` | one decision with its state text and per-question answers |
+| `/api/candles?symbol=BTC/USD&limit=` | stored candles |
+| `/api/reports`, `/api/reports/{day}` | daily reports (Markdown and JSON) |
+| `/api/backtests`, `/api/backtests/{run_id}` | backtest summaries and downsampled equity |
+
+Every paper route takes `?run_id=` (default `paper.run_id`).
+
+### 10. Web dashboard
+
+```bash
+python -m jevtrade.api          # terminal 1: the read-only API on :8000
+cd web && npm ci && npm run dev # terminal 2: http://localhost:5173 (proxies /api to :8000)
+npm run build                   # static files in web/dist, for any web server that proxies /api
+```
+
+A single page (React + TypeScript, Vite, no chart library) that reads the
+API and refreshes every minute. It shows:
+- Loop health from the paper heartbeat, with an icon and label.
+- Tiles for equity, return since start, today's return, drawdown, and
+  closed trades with win rate.
+- The equity curve with a hover crosshair (24 hours, 7 days, 30 days, all).
+  The dashed line is the starting balance.
+- Open positions with stop, mark and unrealized PnL, plus pending orders.
+- The sizing and risk limits in force.
+- Recent trades and recent decisions (p(up), p(flat), p(down), the
+  policy's action and reason), filterable by symbol.
+- Daily reports and saved backtests.
+
+It follows the OS light or dark setting and works down to phone width. Set
+`JEVTRADE_API` to point the dev server at an API elsewhere.
 
 ## Evaluation validity
 
