@@ -403,7 +403,7 @@ It follows the OS light or dark setting and works down to phone width. Set
 
 ### Forward data collection (GitHub Actions)
 
-`.github/workflows/collect.yml` runs at 7 minutes past every hour (and on
+`.github/workflows/collect.yml` runs at 11 minutes past every hour (and on
 demand via **Run workflow**). Each run:
 
 - fetches recent public 1h candles for every configured symbol from Coinbase;
@@ -432,6 +432,14 @@ Locally, against any directory:
 ```bash
 python -m jevtrade.collect --out data-log --max-backfill 24
 ```
+
+GitHub can delay or skip scheduled runs. The `collect-kick` service in
+`docker-compose.yml` is a backstop: at 20 minutes past each hour it asks GitHub
+whether a collect run started this hour and, if none did, starts one (the run
+still happens in GitHub Actions). It needs `GITHUB_TOKEN` with **Actions: read
+and write** on the repo, plus **Contents: read** for the dashboard; without a
+token it exits and stays stopped. Check it with `docker compose logs collect-kick`,
+or run one check by hand with `python -m jevtrade.collect.kick --once`.
 
 #### Jev forward log on the dashboard
 
