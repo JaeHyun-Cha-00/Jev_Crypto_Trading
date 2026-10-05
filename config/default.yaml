@@ -3,7 +3,24 @@
 
 data:
   exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken (latest 720 candles only)
-  symbols: [BTC/USD, ETH/USD] # both exist on kraken too
+  # Every coin Robinhood lists as tradable that also has an active Coinbase
+  # USD market (checked 2026-10-05), stablecoins and PAXG (gold) left out.
+  # Oldest listings first, so a pass that runs out of time has done the majors.
+  # The hourly collect workflow asks Jev once per coin per closed candle:
+  # about $0.00008 per call, so 81 coins x 24 calls = ~$0.16 per day.
+  symbols: [
+    BTC/USD, ETH/USD, BCH/USD, DOGE/USD, ETC/USD, LTC/USD, XRP/USD, ZEC/USD,
+    XLM/USD, BNB/USD, ADA/USD, SOL/USD, AVAX/USD, DOT/USD, SHIB/USD, ATOM/USD,
+    NEAR/USD, COMP/USD, LINK/USD, UNI/USD, ALGO/USD, HBAR/USD, BAT/USD,
+    ZRX/USD, CRV/USD, GRT/USD, AAVE/USD, XTZ/USD, AXS/USD, PEPE/USD, ZRO/USD,
+    RENDER/USD, WIF/USD, ARB/USD, OP/USD, BONK/USD, TRUMP/USD, ONDO/USD,
+    FET/USD, ENA/USD, VIRTUAL/USD, RAY/USD, IMX/USD, WLD/USD, INJ/USD, LDO/USD,
+    QNT/USD, PENGU/USD, FLOKI/USD, PYTH/USD, STRK/USD, AERO/USD, JTO/USD,
+    MORPHO/USD, EIGEN/USD, W/USD, SNX/USD, POPCAT/USD, BIO/USD, PNUT/USD,
+    ORCA/USD, VVV/USD, MOODENG/USD, SUI/USD, SKY/USD, XCN/USD, WLFI/USD,
+    ZORA/USD, SEI/USD, ASTER/USD, XPL/USD, HYPE/USD, AVNT/USD, SYRUP/USD,
+    SKR/USD, MEGA/USD, SENT/USD, CHIP/USD, FLR/USD, RE/USD, BILL/USD,
+  ]
   timeframe: 1h
   start: "2025-01-01T00:00:00Z" # backfilled on coinbase; kraken can't reach it
   page_limit: 300            # clamped per exchange: coinbase 300, kraken 720

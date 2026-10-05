@@ -47,8 +47,9 @@ class MultiSource(WindowedSource):
         return super().fetch_ohlcv(symbol, timeframe, since, limit)
 
 
-def _collector(tmp_path, transport, source=None, max_backfill=24):
+def _collector(tmp_path, transport, source=None, max_backfill=24, symbols=("BTC/USD", "ETH/USD")):
     cfg = load_config()
+    cfg.data.symbols = list(symbols)
     model = JevModel(JevConfig(max_retries=0), transport=transport, sleep=lambda s: None)
     return Collector(cfg, model, source or MultiSource(), tmp_path, max_backfill=max_backfill)
 
@@ -107,6 +108,17 @@ def test_skipped_runs_are_backfilled_up_to_the_limit(tmp_path):
     assert t.calls == 48
     keys = [(r["symbol"], r["candle_ts"]) for r in _decisions(tmp_path)]
     assert len(keys) == len(set(keys))
+
+
+def test_one_symbols_fetch_error_does_not_stop_the_others(tmp_path):
+    # A coin the source can't serve (delisted, exchange error) is skipped for
+    # this pass; the coins after it are still asked about.
+    t = Transport()
+    res = _collector(tmp_path, t, max_backfill=1,
+                     symbols=("BTC/USD", "GONE/USD", "ETH/USD")).run(_now(1200))
+    assert res.failed_symbols == ["GONE/USD"]
+    assert sorted(s for s, _ in res.called) == ["BTC/USD", "ETH/USD"]
+    assert t.calls == 2
 
 
 def test_candle_not_yet_published_is_picked_up_next_run(tmp_path):

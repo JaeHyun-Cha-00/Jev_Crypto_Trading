@@ -1,7 +1,8 @@
 name: collect
 
-# Hourly forward collection: Jev answers for every closed BTC/USD and ETH/USD
-# 1h candle, plus realized outcomes, committed to the `data-log` branch.
+# Hourly forward collection: Jev answers for every closed 1h candle of each
+# coin in config/default.yaml (data.symbols), plus realized outcomes,
+# committed to the `data-log` branch.
 # No trading and no simulated positions. Every Jev call costs money.
 
 on:
@@ -20,7 +21,7 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60      # the first pass after adding coins backfills 24 candles each
     steps:
       - uses: actions/checkout@v4
 

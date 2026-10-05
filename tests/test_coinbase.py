@@ -23,7 +23,10 @@ def _store():
 def test_default_config_is_coinbase_usd():
     cfg = load_config()
     assert cfg.data.exchange == "coinbaseexchange"
-    assert cfg.data.symbols == ["BTC/USD", "ETH/USD"]
+    syms = cfg.data.symbols
+    assert syms[:2] == ["BTC/USD", "ETH/USD"]
+    assert len(syms) == len(set(syms)) and all(s.endswith("/USD") for s in syms)
+    assert not {"USDC/USD", "USDT/USD", "PAXG/USD"} & set(syms)  # no pegged coins
     assert page_limit_for(cfg.data.exchange, cfg.data.page_limit) == 300
 
 

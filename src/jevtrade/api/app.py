@@ -3,7 +3,8 @@
 Every route is a GET. The database is opened with SQLite's `mode=ro`, so
 the API cannot write even by mistake, and it never touches an exchange or
 the model. The forward-log routes only read the collector's JSONL, locally
-or from GitHub (jevtrade.api.forward). It serves the dashboard (stage 10) and anything else that wants
+or from GitHub (jevtrade.api.forward), and /api/forward/paper replays Jev's
+logged answers through the simulator (jevtrade.api.jev_paper). It serves the dashboard (stage 10) and anything else that wants
 to watch the paper account.
 """
 
@@ -21,7 +22,9 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..sim import SimState
+from ..data.timeframes import timeframe_ms
 from .forward import ForwardLog
+from .jev_paper import replay
 from .settings import ApiConfig  # noqa: F401  (re-exported)
 
 
@@ -263,5 +266,18 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None) -> FastAPI:
     def forward_rows(symbol: str | None = None, limit: int = Query(100, ge=1, le=2_000)):
         """Recent decisions, newest first, each with its outcome (null while pending)."""
         return fwd.rows(symbol, limit)
+
+    paper_cache: dict = {}
+
+    @app.get("/api/forward/paper")
+    def forward_paper(actions: int = Query(200, ge=0, le=5_000)):
+        """Jev's simulated account: the policy and simulator replayed over the forward log's
+        answers and closes. No model or exchange calls; fills are simulated."""
+        snap = fwd.snapshot()
+        if paper_cache.get("snap") is not snap:   # replay once per forward-log refresh
+            paper_cache.update(snap=snap, out=replay(snap.rows, app_cfg, timeframe_ms(app_cfg.data.timeframe)))
+        out = dict(paper_cache["out"])
+        out["actions"] = out["actions"][:actions]
+        return out
 
     return app

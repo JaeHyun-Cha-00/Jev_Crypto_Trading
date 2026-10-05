@@ -1,5 +1,5 @@
 import type { Direction, ForwardMetrics, ForwardRow, ForwardSummary } from "./api";
-import { ago, fmtPct, fmtTime } from "./format";
+import { TZ, ago, fmtPct, fmtTime } from "./format";
 
 // Jev's hourly forward calls (collect workflow, data-log branch) against what happened.
 
@@ -181,7 +181,7 @@ export function ForwardLog({ summary, rows, symbol, error }: {
             <table>
               <thead>
                 <tr>
-                  <th>Candle (UTC)</th><th>Symbol</th><th title="Jev's call and its own confidence">Call (conf.)</th><th>Regime</th><th className="num">P(adverse)</th>
+                  <th>Candle ({TZ})</th><th>Symbol</th><th title="Jev's call and its own confidence">Call (conf.)</th><th>Regime</th><th className="num">P(adverse)</th>
                   <th>Realized</th><th className="num">Return</th><th>Result</th>
                 </tr>
               </thead>

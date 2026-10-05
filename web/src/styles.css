@@ -228,3 +228,5 @@ footer { margin-top: 24px; text-align: center; }
   .bar-row { grid-template-columns: 1fr 44px; }
   .bar-track { grid-column: 1 / -1; grid-row: 2; }
 }
+.card.bought { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.coin-pick { appearance: auto; color: var(--ink-2); font: inherit; padding: 6px 10px; max-width: 220px; }
