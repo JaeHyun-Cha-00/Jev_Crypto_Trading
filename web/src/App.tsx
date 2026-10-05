@@ -245,6 +245,7 @@ function JevView({ data }: { data: Data }) {
   const wins = closed.filter((t) => t.pnl > 0).length;
   const realized = closed.reduce((s, t) => s + t.pnl, 0);
   const pol = paper?.policy;
+  const gate = paper?.gate;
 
   const first = equity[0]?.equity;
   const last = equity[equity.length - 1]?.equity;
@@ -315,6 +316,12 @@ function JevView({ data }: { data: Data }) {
           estimated Robinhood spread, not real Robinhood quotes. Hours logged before candle highs and lows were
           recorded only check the{pol ? ` ${fmtPct(pol.stop_loss_pct, false)}` : ""} stop-loss on closes.
         </p>
+        {gate && !gate.open && (
+          <p className="muted small" role="status">
+            Not buying for now: the skill gate is closed until Jev's recent buy signals make money after costs and beat the
+            average coin. Held coins still sell on Jev's answer and the stop.
+          </p>
+        )}
         <p className="muted small">
           Jev's own hourly answers run through the trading rules · {symbols.length > 4 ? `${symbols.length} coins` : symbols.join(", ") || "no coins yet"} ·
           simulated fills, never real orders
@@ -362,8 +369,20 @@ function JevView({ data }: { data: Data }) {
           <h2>Trading rules</h2>
           {pol && (
             <dl className="kv">
-              <dt>Buy when</dt><dd>p(up) ≥ {pol.entry_threshold} and p(up) − p(down) ≥ {pol.min_edge}</dd>
-              <dt>Sell when</dt><dd>p(down) ≥ {pol.exit_threshold}, the stop, or {pol.max_holding_bars ?? "no"} hours held</dd>
+              <dt>Buy when</dt><dd>p(up) ≥ {pol.entry_threshold} and p(up) − p(down) ≥ {pol.min_edge}{gate ? ", while the skill gate is open" : ""}</dd>
+              {gate && (
+                <>
+                  <dt>Skill gate</dt>
+                  <dd>
+                    <span className={`pill ${gate.open ? "up" : ""}`}>{gate.open ? "Open" : "Closed"}</span>{" "}
+                    Buys only while Jev's buy signals from the last {gate.lookback_hours / 24} days made money after costs and beat the average coin
+                    {gate.avg_net != null && gate.avg_excess != null
+                      ? ` (now ${fmtPct(gate.avg_net)} after costs, ${fmtPct(gate.avg_excess)} vs the average coin, ${gate.signals} signals).`
+                      : ` (${gate.signals} of ${gate.min_signals} signals resolved so far).`}
+                  </dd>
+                </>
+              )}
+              <dt>Sell when</dt><dd>p(down) ≥ {pol.exit_threshold}{pol.exit_min_edge ? ` and p(down) − p(up) ≥ ${pol.exit_min_edge}` : ""}, or the stop{pol.max_holding_bars != null ? `, or ${pol.max_holding_bars} hours held` : ""}</dd>
               <dt>Stop-loss</dt><dd>{fmtPct(pol.stop_loss_pct, false)}</dd>
               {config && (
                 <>

@@ -172,17 +172,19 @@ orders fill at the next bar's open.
   `p(up) − p(down) ≥ min_edge`. An abstain or a missing decision means no
   trade.
 - **Size** is risk-based: a trade risks `risk_per_trade` (1%) of equity if
-  its stop is hit, so notional = equity × 1% / stop distance (33% of equity
-  with the 3% stop). It is capped at `max_position_frac` (50%) and by the
+  its stop is hit, so notional = equity × 1% / stop distance (12.5% of equity
+  with the 8% stop). It is capped at `max_position_frac` (50%) and by the
   room left under `max_gross_exposure` (50%). Every backtest summary prints
   the sizing in force.
 - **Exits** are checked in order: stop-loss, `max_holding_bars`,
-  then `p(down) ≥ exit_threshold`. The first two don't depend on the model.
+  then `p(down) ≥ exit_threshold` with `p(down) − p(up) ≥ exit_min_edge`.
+  The first two don't depend on the model.
   `max_holding_bars` can differ per model through
   `max_holding_bars_by_model`; `null` turns the time exit off. The baseline
-  has it off, so it exits when the SMAs cross back (or on the stop).
+  has it off, so it exits when the SMAs cross back (or on the stop). Jev has
+  it off too, so it holds until its answer turns down or the stop.
 - **Re-entry:** after an exit, the same symbol can't enter again for
-  `min_trade_interval_bars` (4) bars.
+  `min_trade_interval_bars` bars (0 by default: it may re-enter right away).
 - **Stops** trigger on the bar's low, not its close. A stopped long fills
   inside that bar at the stop price, or at the bar's open if it gapped
   below the stop, less `stop_slippage_bps`. The backtest and paper loops
@@ -219,9 +221,10 @@ with `bar_open` and `bar_low`.
   action's `fill_price`. An entry's stop is re-anchored to its fill price.
 - Every fill pays `fee_bps` on notional. Equity is cash plus positions marked
   at each close; positions still open at the end close at the last close.
-- `max_holding_bars` defaults to `decision.horizon_bars` (4), so a position is
-  held for the 4 hours the direction question asks about. The baseline
-  overrides it to no time limit and exits on its own signal.
+- `max_holding_bars` defaults to `decision.horizon_bars` (24 in
+  `config/default.yaml`), so a position is held for the hours the direction
+  question asks about. The baseline and Jev override it to no time limit and
+  exit on their own signal.
 - Every decision is logged to `decisions` / `decision_answers` under the run
   id. `summary.json`, `summary.md`, `trades.csv` and `equity.csv` go to
   `backtest.output_dir/<run id>/`.
@@ -413,11 +416,21 @@ shown. It shows:
   with times, prices, size and P&L. Coins Jev has bought get a filter chip;
   the rest of `data.symbols` sit in a picker, so the page scales to many coins.
 - Buys, trades and PnL per coin, for coins Jev has bought.
-- The trading rules in force.
+- The trading rules in force, including whether the skill gate lets Jev buy.
 - Jev's activity: its buys, its closed trades, and every hourly call with
   p(up), p(down), the policy's action and reason, filterable by coin.
 - The Jev forward log (see below): how the hourly forward calls compare
   with what happened.
+
+**Skill gate** (`jev_paper.gate_lookback_hours`, `gate_min_signals`): the
+replay buys only while Jev's recent buy signals would have paid. A signal is
+every logged answer that met the buy thresholds, bought or not; it resolves
+`decision.horizon_bars` later. New buys are allowed while the signals of the
+last 7 days that have resolved averaged a positive return after a round trip
+of costs **and** beat the average logged coin over the same hours (so a
+market-wide rally alone doesn't count), with at least 500 resolved. Held
+coins still sell on Jev's answer and the stop. Blocked buys show a
+`skill_gate:` reason.
 
 The replay prices each hour from the logged closes (an hour opens at the
 previous hour's close), so stops see closes only, not intrabar dips. It covers
