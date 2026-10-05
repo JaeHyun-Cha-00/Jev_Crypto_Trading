@@ -179,27 +179,44 @@ def test_crash_mid_bar_rolls_back_and_retries(tmp_path):
     assert clean.store.equity() == t.store.equity()
 
 
-def test_waits_for_a_lagging_symbol(tmp_path):
-    src = MultiSource(series(), lag={"ETH/USD": 1})
-    path = tmp_path / "p.sqlite"
-    t = trader(path, src)
-    src.now_ms = close_of(FIRST)
+BULL = {"direction": {"up": 0.9, "flat": 0.05, "down": 0.05}}
+BEAR = {"direction": {"up": 0.05, "flat": 0.05, "down": 0.9}}
+
+
+def test_waits_for_a_lagging_held_symbol(tmp_path):
+    src = MultiSource(series())
+    t = run_hourly(tmp_path / "p.sqlite", src, FIRST, FIRST + 2, model=MockModel(fixed=BULL),
+                   stall_grace_bars=3)
+    st = t.store.load()[0]
+    assert "ETH/USD" in st.open or "ETH/USD" in st.pending
+    src.lag = {"ETH/USD": 1}
+    src.now_ms = close_of(FIRST + 2)
     r = t.step(src.now_ms)
     assert r.processed == [] and r.waiting_on == ["ETH/USD"]
     src.lag = {}
     r = t.step(src.now_ms + 60_000)
+    assert r.processed == [T0 + (FIRST + 2) * H] and not r.waiting_on
+
+
+def test_lagging_flat_symbol_is_not_waited_for(tmp_path):
+    # Nothing is ever bought, so a coin with no candle yet is just skipped that bar.
+    src = MultiSource(series(), lag={"ETH/USD": 1})
+    t = trader(tmp_path / "p.sqlite", src, model=MockModel(fixed=BEAR), stall_grace_bars=3)
+    src.now_ms = close_of(FIRST)
+    r = t.step(src.now_ms)
     assert r.processed == [T0 + FIRST * H] and not r.waiting_on
 
 
-def test_lagging_symbol_is_skipped_after_grace(tmp_path):
+def test_lagging_held_symbol_is_skipped_after_grace(tmp_path):
     src = MultiSource(series())
-    t = run_hourly(tmp_path / "p.sqlite", src, FIRST, FIRST + 6, stall_grace_bars=3)
+    t = run_hourly(tmp_path / "p.sqlite", src, FIRST, FIRST + 2, model=MockModel(fixed=BULL),
+                   stall_grace_bars=3)
     src.lag = {"ETH/USD": 10}
-    for i in (FIRST + 6, FIRST + 7, FIRST + 8):
+    for i in (FIRST + 2, FIRST + 3, FIRST + 4):
         src.now_ms = close_of(i)
         assert t.step(src.now_ms).processed == []
-    src.now_ms = close_of(FIRST + 9)
-    assert t.step(src.now_ms).processed == [T0 + (FIRST + 6) * H]  # 3 bars late: go without ETH
+    src.now_ms = close_of(FIRST + 5)
+    assert t.step(src.now_ms).processed == [T0 + (FIRST + 2) * H]  # 3 bars late: go without ETH
 
 
 def test_model_change_on_restart_is_refused(tmp_path):

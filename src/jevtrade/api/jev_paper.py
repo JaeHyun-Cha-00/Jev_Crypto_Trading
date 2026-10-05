@@ -8,6 +8,12 @@ Each logged row carries its candle's close, so a bar is approximated as:
 open = the previous hour's logged close (this candle's own close when the
 previous hour is missing), low = min(open, close). Stops therefore trigger
 on closes, not on intrabar dips.
+
+Within an hour, symbols are evaluated in `Simulator.symbols_by_priority`, the
+same order the backtest and paper loop use: held coins first, then by edge
+(p_up - p_down), highest first, so when the exposure caps leave room for only
+a few entries the slots go to the coins Jev was most confident about, not the
+alphabetically first ones.
 """
 
 from __future__ import annotations
@@ -88,9 +94,12 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
         sim.begin_bar(st, ts)
         now = {s: b[ts] for s, b in bars.items() if ts in b}
         trades += sim.fill_pending(st, ts, now)
-        for sym in sorted(now):
+        hour = {}
+        for sym in now:
             row = decisions.get((sym, ts))
-            d = _decision(row) if row else None
+            hour[sym] = (row, _decision(row) if row else None)
+        for sym in sim.symbols_by_priority(st, {s: d for s, (_, d) in hour.items()}):
+            row, d = hour[sym]
             action, trade = sim.on_close(st, sym, ts, now[sym], d)
             counts[action.kind] += 1
             if trade is not None:

@@ -5,7 +5,7 @@
 
 `run` syncs public candles and processes every newly closed bar, then sleeps
 until the next candle closes. It is meant to run unattended on your own
-machine or a small VM (see README, "Running the paper loop"). It is safe to
+machine or a small VM (see README, "7. Paper loop"). It is safe to
 stop at any time (Ctrl-C, SIGTERM, a reboot): state lives in SQLite and each
 bar commits atomically, so the next start resumes where it left off.
 

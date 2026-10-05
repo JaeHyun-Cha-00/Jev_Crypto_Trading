@@ -1,7 +1,8 @@
 """Read-only view of the hourly forward log (the collector's `data-log` branch).
 
 The collect workflow writes `decisions/YYYY-MM-DD.jsonl` and
-`outcomes/YYYY-MM-DD.jsonl` (see jevtrade.collect.collector). This module
+`outcomes/YYYY-MM-DD.jsonl` (see jevtrade.collect.collector); it never
+reads `state/`, the gzip files of state text. This module
 loads them from a local directory or from GitHub over HTTPS, joins each
 decision with its outcome, and scores Jev's direction calls against naive
 baselines. It only reads: no writes, no model calls, no exchange calls.
@@ -301,6 +302,9 @@ class ForwardLog:
         for f in FOLDERS:
             n, data[f] = read(f)
             files += n
+        start = self.cfg.start_ms()
+        if start is not None:   # nothing before the fresh start is shown
+            data = {f: [r for r in recs if r["candle_ts"] >= start] for f, recs in data.items()}
         cost: dict[str, float] = defaultdict(float)
         for d in data["decisions"]:   # every call, retried errors included
             cost[d["symbol"]] += float(d.get("cost_usd") or 0.0)

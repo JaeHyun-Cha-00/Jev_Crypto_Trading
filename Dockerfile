@@ -1,4 +1,4 @@
-# Python image shared by the paper loop and the read-only API.
+# Python image for the read-only API (docker compose). Any jevtrade CLI runs in it too.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -16,4 +16,4 @@ RUN useradd --create-home --uid 1000 jev && mkdir -p data reports && chown -R je
 USER jev
 
 VOLUME ["/app/data", "/app/reports"]
-CMD ["python", "-m", "jevtrade.paper", "run"]
+CMD ["python", "-m", "jevtrade.api", "--host", "0.0.0.0", "--port", "8000"]

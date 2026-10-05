@@ -150,6 +150,8 @@ export interface JevPaper {
   calls: number;
   counts: Partial<Record<JevAction["action"], number>>;
   per_symbol: Record<string, { trades: number; pnl: number; buys: number }>;
+  /** first candle the portfolio counts (forward_log.start, UTC ms); earlier calls trade nothing */
+  tracking_since: number | null;
 }
 
 export const getForwardSummary = () => get<ForwardSummary>("/forward/summary");

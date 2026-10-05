@@ -47,9 +47,10 @@ class MultiSource(WindowedSource):
         return super().fetch_ohlcv(symbol, timeframe, since, limit)
 
 
-def _collector(tmp_path, transport, source=None, max_backfill=24, symbols=("BTC/USD", "ETH/USD")):
+def _collector(tmp_path, transport, source=None, max_backfill=24, symbols=("BTC/USD", "ETH/USD"), start=None):
     cfg = load_config()
     cfg.data.symbols = list(symbols)
+    cfg.forward_log.start = start   # the default fresh-start date is after the synthetic candles
     model = JevModel(JevConfig(max_retries=0), transport=transport, sleep=lambda s: None)
     return Collector(cfg, model, source or MultiSource(), tmp_path, max_backfill=max_backfill)
 
@@ -78,8 +79,50 @@ def test_first_run_backfills_24_candles_per_symbol(tmp_path):
     assert r["status"] == "answered" and r["served_model"] == "typesafe/jev-1.13-20260917"
     assert set(r["answers"]) == {"direction", "regime", "adverse_move", "clear_signal"}
     assert r["answers"]["adverse_move"]["noul"] == 0.32
-    assert r["state"] and r["raw_response"] is None and r["cost_usd"] > 0
+    assert "state" not in r and r["raw_response"] is None and r["cost_usd"] > 0
     assert (tmp_path / "README.md").exists()
+
+
+def test_fresh_start_cutoff_limits_the_backfill(tmp_path):
+    from datetime import datetime, timezone
+
+    start = T0 + 1195 * H
+    t = Transport()
+    c = _collector(tmp_path, t, start=datetime.fromtimestamp(start / 1000, tz=timezone.utc))
+    c.run(_now(1200))
+    btc = sorted(r["candle_ts"] for r in _decisions(tmp_path) if r["symbol"] == "BTC/USD")
+    assert btc == [T0 + i * H for i in range(1195, 1201)] and t.calls == 12
+    # Before the start hour nothing is asked at all.
+    t2 = Transport()
+    _collector(tmp_path / "early", t2, start=datetime.fromtimestamp((T0 + 1300 * H) / 1000, tz=timezone.utc)).run(_now(1200))
+    assert t2.calls == 0 and _decisions(tmp_path / "early") == []
+
+
+def test_state_text_goes_to_a_gzip_file_beside_the_decisions(tmp_path):
+    c = _collector(tmp_path, Transport())
+    c.run(_now(1200))
+    recs = _decisions(tmp_path)
+    states = [s for p in sorted((tmp_path / "state").glob("*.jsonl.gz")) for s in c.states.read(p.name[:10])]
+    assert {(s["symbol"], s["candle_ts"], s["input_hash"]) for s in states} == \
+        {(r["symbol"], r["candle_ts"], r["input_hash"]) for r in recs}
+    assert all(len(s["state"]) > 500 for s in states)
+    # Decision lines stay small without the state text.
+    assert max(len(json.dumps(r)) for r in recs) < 2000
+    # The next hour appends a gzip member; the earlier ones still read.
+    before = len(states)
+    _collector(tmp_path, Transport()).run(_now(1201))
+    after = [s for p in sorted((tmp_path / "state").glob("*.jsonl.gz")) for s in c.states.read(p.name[:10])]
+    assert len(after) == before + 2 and after[:before] == states
+
+
+def test_old_decision_lines_with_inline_state_still_count_as_done(tmp_path):
+    _collector(tmp_path, Transport()).run(_now(1200))
+    for p in (tmp_path / "decisions").glob("*.jsonl"):   # rewrite as the pre-split format
+        lines = [dict(json.loads(line), state="old inline state") for line in p.read_text().splitlines()]
+        p.write_text("".join(json.dumps(r) + "\n" for r in lines))
+    t = Transport()
+    _collector(tmp_path, t).run(_now(1200) + 20 * 60_000)
+    assert t.calls == 0
 
 
 def test_rerun_in_the_same_hour_calls_nothing(tmp_path):
@@ -193,3 +236,18 @@ def test_outcome_labels():
     assert o["direction"] == "up" and o["ret_pct"] == pytest.approx(1.5)
     assert o["adverse_move"] is True and o["min_low_pct"] == pytest.approx(-3.5)
     assert outcome_record(dec, df.iloc[:4], H, 4, 1.0, 3.0) is None
+
+
+def test_decision_cli_state_matches_the_collector(tmp_path):
+    """`python -m jevtrade.decision` must show Jev the same state the hourly log does."""
+    from jevtrade.collect.collector import StateLog
+    from jevtrade.decision.__main__ import _pretty, latest_state
+
+    c = _collector(tmp_path, Transport(), max_backfill=1, symbols=("BTC/USD",))
+    now = _now(N - 1)
+    c.run(now)
+    [logged] = StateLog(tmp_path / "state").read("2024-03-03")
+    candles, state = latest_state(c.cfg, MultiSource(), "BTC/USD", now)
+    assert int(candles.index[-1].value // 1_000_000) == logged["candle_ts"]
+    assert state.text == logged["state"]
+    assert _pretty("<html>502</html>") == "<html>502</html>"   # error pages print as-is

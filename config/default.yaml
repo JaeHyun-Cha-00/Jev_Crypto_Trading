@@ -96,7 +96,7 @@ paper:                       # python -m jevtrade.paper run   (simulated fills o
   poll_delay_s: 30           # after a candle closes, wait this long for the exchange to publish it
   retry_s: 60                # after a failed step (network error), retry this soon
   max_catchup_bars: 48       # after downtime, older missed bars run risk-only (stops, no new entries)
-  stall_grace_bars: 3        # process a bar without a symbol whose candle is this late
+  stall_grace_bars: 1        # wait at most this many bars for a held coin's late candle; flat coins never wait
   log_inputs: true           # keep each state text with its decision
   daily_report: true         # write the report for each UTC day as its last bar is processed
   lock_path: null            # default: <sqlite_path>.paper.lock
@@ -118,3 +118,7 @@ forward_log:                 # the dashboard's "Jev forward log": the collect wo
   refresh_seconds: 300       # re-read at most this often; on failure the last good data is kept
   max_days: 30               # newest day files to load
   token_env: GITHUB_TOKEN    # optional token for a private repo or higher GitHub rate limits
+  # Fresh start (candle open, UTC). The collect workflow never asks Jev about an
+  # earlier candle (its backfill stops here), and the dashboard ignores earlier
+  # lines, so the portfolio starts at its full balance from this hour. null: no cutoff.
+  start: "2026-10-05T06:00:00Z"
