@@ -55,7 +55,8 @@ Written by the hourly `collect` workflow on main (`python -m jevtrade.collect`).
 Nothing here trades or simulates positions.
 
 - `decisions/YYYY-MM-DD.jsonl`: one line per Jev call, per symbol and closed 1h
-  candle (day = the candle's open time, UTC). `status` is `answered`, `abstain`
+  candle (day = the candle's open time, UTC), with that candle's `open`, `high`,
+  `low`, `close` and `volume` (base units; older lines have only `close`) and `called_at`, when the call was made. `status` is `answered`, `abstain`
   (Jev responded but the answer was unusable) or `error` (no response; that
   candle is asked again on a later run). `answers` holds every answer as Jev
   returned it; a Noul's `noul` is P(yes).
@@ -169,8 +170,12 @@ def candles_frame(rows: list[list[float]]) -> pd.DataFrame:
 
 
 def decision_record(symbol: str, ts: int, close: float, d: Decision, qhash: str,
-                    called_at_ms: int) -> dict:
-    """One decision line; the state text goes to `StateLog` (see `state_record`)."""
+                    called_at_ms: int, candle: dict | None = None) -> dict:
+    """One decision line; the state text goes to `StateLog` (see `state_record`).
+
+    `candle` adds the candle's open, high, low and volume beside `close`, so the
+    dashboard's replay can trigger stops on intrabar lows and size by volume.
+    """
     if not d.abstain:
         status = "answered"
     elif (d.abstain_reason or "").startswith("request failed"):
@@ -184,6 +189,7 @@ def decision_record(symbol: str, ts: int, close: float, d: Decision, qhash: str,
         "candle_ts": ts,
         "candle_open": ms_to_iso(ts),
         "close": close,
+        **{k: (candle or {}).get(k) for k in ("open", "high", "low", "volume")},
         "called_at": ms_to_iso(called_at_ms),
         "status": status,
         "abstain_reason": d.abstain_reason,
@@ -328,8 +334,9 @@ class Collector:
                 log.warning("%s %s: not enough history for a state", sym, ms_to_iso(ts))
                 continue
             d = self.model.decide(state, self.questions)
-            rec = decision_record(sym, ts, float(df["close"].iloc[i]), d, self.qhash,
-                                  int(time.time() * 1000))
+            bar = df.iloc[i]
+            rec = decision_record(sym, ts, float(bar["close"]), d, self.qhash, int(time.time() * 1000),
+                                  {k: float(bar[k]) for k in ("open", "high", "low", "volume")})
             self.decisions.append(rec)
             states.append(state_record(rec, state.text))
             logged.append(rec)
