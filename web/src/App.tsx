@@ -520,10 +520,13 @@ function JevPortfolio({ data, market }: { data: Data; market: LiveMarket }) {
   const hourly = (paper?.curve ?? []).map((p) => ({ ...p, bar_ts: p.bar_ts + HOUR_MS }));
   const history = detail?.length ? detail : hourly;
   const lastKnown = history.length ? history[history.length - 1].bar_ts : -Infinity;
-  // The first decision comes as the start candle closes, an hour after it opens.
-  const start = paper?.tracking_since != null && hourly.length ? [{ bar_ts: paper.tracking_since + HOUR_MS, equity: paper.initial_equity }] : [];
+  // The first decision comes as the start candle closes, an hour after it opens. The account
+  // is at its full balance just before it, so the chart shows the first buys' costs.
+  const startTs = paper?.tracking_since != null ? paper.tracking_since + HOUR_MS : null;
+  const start = startTs != null && paper && hourly.length
+    ? [{ bar_ts: Math.min(startTs, (history[0]?.bar_ts ?? Infinity) - 60_000), equity: paper.initial_equity }] : [];
   const curve = [
-    ...start.filter((p) => !history.length || p.bar_ts < history[0].bar_ts),
+    ...start,
     ...history,
     ...(history.length ? tail.filter((p) => p.bar_ts > lastKnown) : []),
     ...(live != null && hourly.length ? [{ bar_ts: Date.now(), equity: live }] : []),
@@ -539,9 +542,11 @@ function JevPortfolio({ data, market }: { data: Data; market: LiveMarket }) {
   const realized = closed.reduce((s, t) => s + t.pnl, 0);
   const gate = paper?.gate;
 
+  // A range return only says something new when the range is shorter than the tracking period;
+  // it is measured from the account at the start of the range.
   const first = equity[0]?.equity;
   const last = equity[equity.length - 1]?.equity;
-  const rangeReturn = first && last !== undefined ? last / first - 1 : null;
+  const rangeReturn = startTs != null && cutoff > startTs && first && last !== undefined ? last / first - 1 : null;
   const rangeLabel = RANGES.find((r) => r.id === range)!.label;
 
   return (
@@ -560,7 +565,7 @@ function JevPortfolio({ data, market }: { data: Data; market: LiveMarket }) {
             <div className="deltas">
               <span className={`pill ${tone(totalReturn) ?? ""}`}>{fmtPct(totalReturn)}</span>
               <span>since tracking started</span>
-              {rangeReturn !== null && range !== "all" && (
+              {rangeReturn !== null && (
                 <>
                   <span className={`pill ${tone(rangeReturn) ?? ""}`}>{fmtPct(rangeReturn)}</span>
                   <span>{rangeLabel}</span>
