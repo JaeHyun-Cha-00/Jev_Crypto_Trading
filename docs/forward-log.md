@@ -3,13 +3,7 @@
 `.github/workflows/collect.yml` runs at 1 minute past every hour (and on
 demand via **Run workflow**). Each run:
 
-- reads the coin list live (`data.symbols_live`): every Robinhood-tradable,
-  non-stablecoin coin with an online Coinbase USD market, less `data.exclude`,
-  falling back to `data.symbols` if either site can't be reached;
-- reads Robinhood's bid and ask for every coin in one public call and logs it
-  on the newest candle's line (`rh_bid`, `rh_ask`), so the dashboard's replay
-  pays the spread Robinhood really quoted;
-- fetches recent public 1h candles for every tracked symbol from Coinbase;
+- fetches recent public 1h candles from Coinbase for every coin in `data.symbols`;
 - asks Jev (the pinned snapshot) the configured questions once for each closed
   candle that has no answer logged yet, looking back at most 24 candles, so a
   skipped or delayed run is backfilled and no candle is asked twice;
@@ -26,8 +20,8 @@ logged with `status: "error"` and asked again on the next run. The key comes
 from the `OPENROUTER_API_KEY` repository secret (Settings → Secrets and
 variables → Actions); the run stops before any call if it is missing. Each
 call costs money: about $0.00008 at the recorded ~2,000 input tokens, so the
-default 81 coins hourly is roughly $0.16 a day (about $4.70 a month). Trim
-`data.symbols` and turn `data.symbols_live` off to spend less. A coin whose candles can't be fetched is skipped
+default 82 coins hourly is roughly $0.16 a day (about $4.70 a month). Trim
+`data.symbols` to spend less. A coin whose candles can't be fetched is skipped
 for that run and retried the next hour; the other coins still run.
 
 Locally, against any directory:

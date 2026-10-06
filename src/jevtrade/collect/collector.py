@@ -21,11 +21,6 @@ Once a decision's horizon has closed, the realized outcome (close-to-close
 change, direction label, deepest dip below the decision close) goes to
 `<out>/outcomes/<YYYY-MM-DD>.jsonl`, keyed the same way. Nothing here trades
 or simulates positions.
-
-With a `quotes` source, each run also reads Robinhood's bid and ask for every
-coin once, before asking Jev, and logs them on that run's newest-candle lines
-(`rh_bid`, `rh_ask`, `rh_quote_at`), so the dashboard's replay can pay the
-spread Robinhood actually quoted instead of an estimate.
 """
 
 from __future__ import annotations
@@ -38,7 +33,6 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable
 
 import pandas as pd
 
@@ -62,9 +56,8 @@ Nothing here trades or simulates positions.
 - `decisions/YYYY-MM-DD.jsonl`: one line per Jev call, per symbol and closed 1h
   candle (day = the candle's open time, UTC), with that candle's `open`, `high`,
   `low`, `close` and `volume` (base units; older lines have only `close`) and `called_at`, when the call was made.
-  Lines for the newest candle of a run also carry Robinhood's quote for the
-  coin at the start of that run: `rh_bid`, `rh_ask` and `rh_quote_at`
-  (absent when Robinhood couldn't be read). `status` is `answered`, `abstain`
+  Lines from 2026-10-05 and 2026-10-06 may also carry a Robinhood quote
+  (`rh_bid`, `rh_ask`, `rh_quote_at`); it is no longer logged. `status` is `answered`, `abstain`
   (Jev responded but the answer was unusable) or `error` (no response; that
   candle is asked again on a later run). `answers` holds every answer as Jev
   returned it; a Noul's `noul` is P(yes).
@@ -178,13 +171,11 @@ def candles_frame(rows: list[list[float]]) -> pd.DataFrame:
 
 
 def decision_record(symbol: str, ts: int, close: float, d: Decision, qhash: str,
-                    called_at_ms: int, candle: dict | None = None, quote: dict | None = None) -> dict:
+                    called_at_ms: int, candle: dict | None = None) -> dict:
     """One decision line; the state text goes to `StateLog` (see `state_record`).
 
     `candle` adds the candle's open, high, low and volume beside `close`, so the
     dashboard's replay can trigger stops on intrabar lows and size by volume.
-    `quote` ({"bid", "ask", "at"}) adds Robinhood's quote as `rh_bid`, `rh_ask`
-    and `rh_quote_at`.
     """
     if not d.abstain:
         status = "answered"
@@ -201,8 +192,6 @@ def decision_record(symbol: str, ts: int, close: float, d: Decision, qhash: str,
         "close": close,
         **{k: (candle or {}).get(k) for k in ("open", "high", "low", "volume")},
         "called_at": ms_to_iso(called_at_ms),
-        **({"rh_bid": quote["bid"], "rh_ask": quote["ask"], "rh_quote_at": ms_to_iso(quote["at"])}
-           if quote else {}),
         "status": status,
         "abstain_reason": d.abstain_reason,
         "requested_model": x.get("requested_model"),
@@ -257,9 +246,8 @@ def outcome_record(dec: dict, df: pd.DataFrame, tf_ms: int, horizon: int,
 
 class Collector:
     def __init__(self, app_cfg, model: DecisionModel, source: OHLCVSource, out_dir: str | Path,
-                 max_backfill: int = 24, quotes: Callable[[list[str]], dict[str, dict]] | None = None):
+                 max_backfill: int = 24):
         self.cfg = app_cfg
-        self.quotes = quotes
         self.model = model
         self.source = source
         self.out = Path(out_dir)
@@ -300,13 +288,6 @@ class Collector:
         have_outcome = {(r["symbol"], r["candle_ts"]) for r in self.outcomes.read(oldest, latest)}
 
         res = CollectResult()
-        quotes: dict[str, dict] = {}
-        if self.quotes is not None:
-            at = int(time.time() * 1000)
-            try:
-                quotes = {s: {**q, "at": at} for s, q in self.quotes(list(self.cfg.data.symbols)).items()}
-            except Exception as e:  # noqa: BLE001 - the replay falls back to its spread estimate
-                log.warning("Robinhood quotes unavailable: %s", e)
         # One gzip member per run: a member per call compresses about 2.5x worse.
         states: list[dict] = []
         try:
@@ -324,7 +305,7 @@ class Collector:
                     continue
                 feats = compute_features(df, self.cfg.features)
                 pos = {int(ix.value // 1_000_000): i for i, ix in enumerate(df.index)}
-                self._decide(sym, df, feats, pos, first, latest, done, logged, states, res, quotes.get(sym))
+                self._decide(sym, df, feats, pos, first, latest, done, logged, states, res)
 
                 for rec in logged:
                     key = (rec["symbol"], rec["candle_ts"])
@@ -341,13 +322,8 @@ class Collector:
         return res
 
     def _decide(self, sym: str, df: pd.DataFrame, feats, pos: dict[int, int], first: int, latest: int,
-                done: set, logged: list[dict], states: list[dict], res: CollectResult,
-                quote: dict | None = None) -> None:
-        """Ask Jev about every candle of `sym` in [first, latest] not yet answered.
-
-        `quote` goes only on the `latest` candle's line: older candles being
-        backfilled were decided on hours ago, when the quote was different.
-        """
+                done: set, logged: list[dict], states: list[dict], res: CollectResult) -> None:
+        """Ask Jev about every candle of `sym` in [first, latest] not yet answered."""
         horizon = self.cfg.decision.horizon_bars
         for ts in range(first, latest + 1, self.tf_ms):
             if (sym, ts) in done or ts not in pos:
@@ -362,8 +338,7 @@ class Collector:
             d = self.model.decide(state, self.questions)
             bar = df.iloc[i]
             rec = decision_record(sym, ts, float(bar["close"]), d, self.qhash, int(time.time() * 1000),
-                                  {k: float(bar[k]) for k in ("open", "high", "low", "volume")},
-                                  quote if ts == latest else None)
+                                  {k: float(bar[k]) for k in ("open", "high", "low", "volume")})
             self.decisions.append(rec)
             states.append(state_record(rec, state.text))
             logged.append(rec)

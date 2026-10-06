@@ -128,7 +128,7 @@ class Market:
         val = fetch()
         with self._lock:
             self._cache[key] = (now, val)
-            if len(self._cache) > 500:   # drop the stalest entries; 81 coins x a few views
+            if len(self._cache) > 500:   # drop the stalest entries; 82 coins x a few views
                 for k, _ in sorted(self._cache.items(), key=lambda kv: kv[1][0])[:100]:
                     self._cache.pop(k, None)
         return val
