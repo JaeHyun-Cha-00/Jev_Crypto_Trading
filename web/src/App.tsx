@@ -169,15 +169,14 @@ const fmtQty = (q: number) =>
   q >= 1000 ? q.toLocaleString(undefined, { maximumFractionDigits: 0 }) : q.toLocaleString(undefined, { maximumSignificantDigits: 4 });
 
 /** Every coin Jev bought, split into what it holds now (or is about to buy) and what it sold. */
-function Bought({ paper, symbol, market }: { paper: JevPaper | null; symbol: string; market: LiveMarket }) {
-  const mine = <T extends { symbol: string }>(xs: T[]) => xs.filter((x) => !symbol || x.symbol === symbol);
-  const pending = mine(paper?.pending ?? []).filter((p) => p.kind === "enter");
+function Bought({ paper, market }: { paper: JevPaper | null; market: LiveMarket }) {
+  const pending = (paper?.pending ?? []).filter((p) => p.kind === "enter");
   // Held coins at their live Coinbase price, falling back to the last hourly close.
-  const held = mine(paper?.positions ?? []).map((p) => {
+  const held = (paper?.positions ?? []).map((p) => {
     const mark = market.bySymbol[p.symbol]?.price ?? p.mark;
     return { ...p, mark, unrealized_pnl: p.qty * (mark - p.entry_price) };
   });
-  const sold = mine(paper?.trades ?? []);
+  const sold = paper?.trades ?? [];
   const base = (s: string) => s.split("/")[0];
   const unrealized = held.reduce((sum, p) => sum + p.unrealized_pnl, 0);
   const realized = sold.reduce((sum, t) => sum + t.pnl, 0);
@@ -192,7 +191,7 @@ function Bought({ paper, symbol, market }: { paper: JevPaper | null; symbol: str
       </div>
       {count === 0 ? (
         <p className="muted">
-          Jev hasn't bought anything{symbol ? ` on ${symbol}` : ""} yet. It buys when p(up) is at least{" "}
+          Jev hasn't bought anything yet. It buys when p(up) is at least{" "}
           {paper?.policy.entry_threshold ?? 0.55} and beats p(down) by {paper?.policy.min_edge ?? 0.1}
           {paper?.gate ? ", while the skill gate is open" : ""}.
         </p>
@@ -510,7 +509,7 @@ function useDetail(hours: number, lastBar: number | null | undefined): CurvePoin
 }
 
 /** What Jev holds and sold, and the account's balance over time. */
-function JevPortfolio({ data, symbol, market }: { data: Data; symbol: string; market: LiveMarket }) {
+function JevPortfolio({ data, market }: { data: Data; market: LiveMarket }) {
   const [range, setRange] = useState<RangeId>("all");
   const { config, paper } = data;
   const hours = RANGES.find((r) => r.id === range)!.hours;
@@ -602,7 +601,7 @@ function JevPortfolio({ data, symbol, market }: { data: Data; symbol: string; ma
         <Tile label="Realized PnL" value={fmtMoney(realized)} tone={tone(realized)} />
       </section>
 
-      <Bought paper={paper} symbol={symbol} market={market} />
+      <Bought paper={paper} market={market} />
 
     </>
   );
@@ -754,9 +753,10 @@ function JevView({ data, page, symbol, setSymbol, market }: {
   return (
     <>
       <JevNav page={page} />
-      {page !== "rules" && <CoinChips data={data} symbol={symbol} setSymbol={setSymbol} />}
+      {/* The coin filter is for the long lists; the portfolio always shows the whole account. */}
+      {(page === "activity" || page === "accuracy") && <CoinChips data={data} symbol={symbol} setSymbol={setSymbol} />}
       {page === "portfolio" ? (
-        <JevPortfolio data={data} symbol={symbol} market={market} />
+        <JevPortfolio data={data} market={market} />
       ) : page === "activity" ? (
         <JevActivity data={data} symbol={symbol} />
       ) : page === "accuracy" ? (
