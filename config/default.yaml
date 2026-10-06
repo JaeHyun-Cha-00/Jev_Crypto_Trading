@@ -27,12 +27,8 @@ data:
     SKR/USD, MEGA/USD, SENT/USD, CHIP/USD, FLR/USD, RE/USD, BILL/USD,
   ]
   timeframe: 1h
-  start: "2025-01-01T00:00:00Z" # backfilled on coinbase; kraken can't reach it
   page_limit: 300            # clamped per exchange: coinbase 300, kraken 720
   requests_trust_env: true   # use HTTPS_PROXY / REQUESTS_CA_BUNDLE from the environment
-
-storage:
-  sqlite_path: data/jevtrade.sqlite
 
 features:
   return_windows: [1, 4, 24, 72]
@@ -47,16 +43,12 @@ state:
   target_max_tokens: 2000
 
 decision:
-  model: mock                # mock | baseline | jev
   # Jev is asked about the next 24 hours and a 3% band: a Robinhood round trip
   # costs ~2%, so "up" means a move that still pays after costs. Over 180 days
   # of these coins a 4-hour, 1% "up" averaged only +2.5%.
   horizon_bars: 24           # direction horizon: 24 bars = 24 hours on 1h candles
   flat_band_pct: 3.0         # "up" > +3%, "down" < -3%, otherwise "flat"
   adverse_move_pct: 8.0      # matches policy.stop_loss_pct; see docs/jev_prompt.md
-  mock_abstain_rate: 0.1
-  baseline_fast: 20
-  baseline_slow: 50
   jev:                       # key comes from $OPENROUTER_API_KEY, never from YAML
     base_url: https://openrouter.ai/api/v1
     model: typesafe/jev-1.13-20260917   # pinned snapshot; aliases are rejected
@@ -87,31 +79,7 @@ policy:                      # all risk limits live here, enforced in code
   min_trade_interval_bars: 0 # bars after an exit before the same symbol can re-enter (0 = right away)
   # max_holding_bars defaults to decision.horizon_bars (24); set it here to override.
   max_holding_bars_by_model: # per decision model; null = no time exit
-    baseline: null           # exits when the SMA crosses back (or on the stop)
     jev: null                # holds until p(down) >= exit_threshold or the stop
-
-backtest:                    # python -m jevtrade.backtest
-  initial_equity: 10000
-  fee_bps: 10                # per side, on notional
-  slippage_bps: 2            # entries and non-stop exits fill at the next open, moved this much against us
-  start: null                # first decision bar (ISO-8601 UTC); null = all stored data after warm-up
-  end: null
-  output_dir: data/backtests
-  log_decisions: true        # decisions table, under the run id
-  log_inputs: false          # also store each state text (~2KB per decision)
-
-paper:                       # python -m jevtrade.paper run   (simulated fills only, never real orders)
-  run_id: paper              # change it to start a fresh paper account; old rows are kept
-  initial_equity: 10000
-  fee_bps: 10                # same cost model as the backtest
-  slippage_bps: 2
-  poll_delay_s: 30           # after a candle closes, wait this long for the exchange to publish it
-  retry_s: 60                # after a failed step (network error), retry this soon
-  max_catchup_bars: 48       # after downtime, older missed bars run risk-only (stops, no new entries)
-  stall_grace_bars: 1        # wait at most this many bars for a held coin's late candle; flat coins never wait
-  log_inputs: true           # keep each state text with its decision
-  daily_report: true         # write the report for each UTC day as its last bar is processed
-  lock_path: null            # default: <sqlite_path>.paper.lock
 
 jev_paper:                   # the dashboard's Jev portfolio, replayed from the forward log
   initial_equity: 10000
@@ -139,11 +107,7 @@ jev_paper:                   # the dashboard's Jev portfolio, replayed from the 
   gate_lookback_hours: 168
   gate_min_signals: 500
 
-report:                      # python -m jevtrade.report [--day YYYY-MM-DD]
-  output_dir: reports/out    # <output_dir>/<run id>/<day>.md and .json (git-ignored)
-  buckets: 5                 # reliability buckets for p(up)
-
-api:                         # python -m jevtrade.api   (GET only, database opened read-only)
+api:                         # python -m jevtrade.api   (GET only)
   host: 127.0.0.1            # 0.0.0.0 inside docker; keep it off the public internet
   port: 8000
   cors_origins: ["http://localhost:5173"]   # the dashboard's dev server

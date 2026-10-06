@@ -1,17 +1,16 @@
 """Running the API and dashboard as one public web service (render.yaml).
 
-Locally, docker compose puts nginx in front of the API and keeps both on
-localhost. A hosted copy is one container on the internet instead, so this
-module adds, only when the matching environment variable is set:
+A hosted copy is one container on the internet, so this module adds, only
+when the matching environment variable is set:
 
 - JEVTRADE_WEB_DIR: serve the built dashboard (web/dist) from the API itself,
-  with unknown paths falling back to index.html like nginx's try_files.
+  with unknown paths falling back to index.html.
 - DASHBOARD_PASSWORD: HTTP basic auth on every route except /api/health (the
   host's health check and the keep-alive ping). Any user name works. Without
   it a hosted dashboard would show the private forward log to anyone.
 - JEVTRADE_KICK=1: run the collect backstop (jevtrade.collect.kick) in a
   background thread, at minute JEVTRADE_KICK_MINUTE (default 3), so the
-  hourly run starts even when the local docker box is off.
+  hourly run starts even when GitHub's schedule skips it.
 - JEVTRADE_KEEPALIVE_MIN: every N minutes GET <public URL>/api/health, so a
   free instance that sleeps after idle time stays up for the kick thread.
   The URL is JEVTRADE_PUBLIC_URL, else Render's RENDER_EXTERNAL_URL.

@@ -2,8 +2,7 @@
 
     python -m jevtrade.api [--host 127.0.0.1] [--port 8000] [--config PATH]
 
-Docs at http://<host>:<port>/docs. Every route is a GET and the database is
-opened read-only, so it is safe to run next to the paper loop. Environment
+Docs at http://<host>:<port>/docs. Every route is a GET. Environment
 variables turn on the hosted extras (dashboard, password, collect backstop):
 see jevtrade.api.hosting. $PORT, when set, is the default port.
 """

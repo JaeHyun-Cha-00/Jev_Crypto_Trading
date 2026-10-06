@@ -4,9 +4,8 @@
 
 Fetches recent public candles (the same lookback the hourly collector uses,
 so the state text matches what Jev is shown there), builds the market
-state, asks Jev the configured questions once, logs the decision and every
-answer to the configured SQLite store, and prints the raw response, latency,
-input tokens and cost. `--record DIR` saves the state and response
+state, asks Jev the configured questions once, and prints the raw response,
+latency, input tokens and cost. Nothing is logged. `--record DIR` saves the state and response
 body as a test fixture (no headers, so no credentials).
 """
 
@@ -21,12 +20,10 @@ from pathlib import Path
 from ..config import load_config
 from ..collect.collector import candles_frame, lookback_bars
 from ..data.fetcher import OHLCVSource, fetch_range, has_deep_history, page_limit_for, public_exchange
-from ..data.store import connect
 from ..data.timeframes import last_closed_open_ms, timeframe_ms
 from ..features.compute import compute_features
 from ..state.builder import MarketState, build_state
 from .jev import JevModel
-from .log import DecisionLog
 
 
 def latest_state(cfg, source: OHLCVSource, symbol: str, now_ms: int):
@@ -69,10 +66,6 @@ def main() -> None:
 
     questions = cfg.decision.resolved_questions(cfg.data.timeframe)
     d = JevModel(cfg.decision.jev).decide(state, questions)
-    bar_ts = int(candles.index[-1].timestamp() * 1000)
-    Path(cfg.storage.sqlite_path).parent.mkdir(parents=True, exist_ok=True)
-    decision_id = DecisionLog(connect(cfg.storage.sqlite_path)).record(
-        "live-cli", symbol, bar_ts, d, state.text)
 
     print(f"symbol={symbol} last_closed_bar={candles.index[-1].isoformat()} "
           f"candles={len(candles)} state_est_tokens={state.est_tokens}")
@@ -81,7 +74,6 @@ def main() -> None:
           f"est_cost_usd={d.extra.get('estimated_cost_usd')} "
           f"reported_cost_usd={d.extra.get('reported_cost_usd')}")
     print(f"abstain={d.abstain} reason={d.abstain_reason}")
-    print(f"logged decision id={decision_id} to {cfg.storage.sqlite_path}")
     print("raw_response:")
     print(_pretty(d.raw_output) if d.raw_output else "(none)")
 

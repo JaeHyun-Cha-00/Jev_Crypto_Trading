@@ -41,7 +41,7 @@ class PolicyConfig(BaseModel):
     max_holding_bars: int | None = Field(24, ge=1)     # None: no time-based exit
     # Per decision model override of max_holding_bars (None: the model's own
     # exit signal and the stop are the only exits). See `for_model`.
-    max_holding_bars_by_model: dict[str, int | None] = Field(default_factory=lambda: {"baseline": None})
+    max_holding_bars_by_model: dict[str, int | None] = Field(default_factory=dict)
     min_trade_interval_bars: int = Field(4, ge=0)      # bars after an exit before re-entering
 
     @model_validator(mode="after")
@@ -178,7 +178,7 @@ class Policy:
     ) -> Action:
         """Decide what to do at the close of bar `bar_ts`.
 
-        Backtest and paper loops must pass `bar_open` and `bar_low` so stops
+        Callers must pass `bar_open` and `bar_low` so stops
         trigger on the bar's low. Without them the bar is treated as having
         no range beyond its close.
         """

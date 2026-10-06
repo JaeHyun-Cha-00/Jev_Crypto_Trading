@@ -1,7 +1,7 @@
 """Typed configuration loaded from YAML.
 
 Secrets never live in YAML: anything sensitive is read from environment
-variables at the point of use. Each stage adds its own section here.
+variables at the point of use.
 """
 
 from __future__ import annotations
@@ -16,12 +16,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from .api.settings import ApiConfig
 from .data.market import MarketConfig
 from .forward.settings import ForwardLogConfig, JevPaperConfig
-from .backtest.engine import BacktestConfig
 from .decision.base import DecisionConfig
 from .features.compute import FeatureConfig
-from .paper.engine import PaperConfig
 from .policy.engine import PolicyConfig
-from .report.daily import ReportConfig
 from .state.builder import StateConfig
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "default.yaml"
@@ -49,8 +46,6 @@ class DataConfig(BaseModel):
     symbols_live: bool = False
     exclude: list[str] = Field(default_factory=list)   # never tracked, even when listed live
     timeframe: str = "1h"
-    # Earliest candle to keep (ISO-8601, UTC). Deep-history exchanges backfill to it.
-    start: str = "2025-01-01T00:00:00Z"
     # Max candles per request; clamped to the exchange cap (coinbase 300, kraken 720).
     page_limit: int = 300
     # Honour HTTPS_PROXY / REQUESTS_CA_BUNDLE env vars (ccxt ignores them by default).
@@ -64,20 +59,12 @@ class DataConfig(BaseModel):
         return v
 
 
-class StorageConfig(BaseModel):
-    sqlite_path: str = "data/jevtrade.sqlite"
-
-
 class AppConfig(BaseModel):
     data: DataConfig = Field(default_factory=DataConfig)
-    storage: StorageConfig = Field(default_factory=StorageConfig)
     features: FeatureConfig = Field(default_factory=FeatureConfig)
     state: StateConfig = Field(default_factory=StateConfig)
     decision: DecisionConfig = Field(default_factory=DecisionConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
-    backtest: BacktestConfig = Field(default_factory=BacktestConfig)
-    paper: PaperConfig = Field(default_factory=PaperConfig)
-    report: ReportConfig = Field(default_factory=ReportConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     forward_log: ForwardLogConfig = Field(default_factory=ForwardLogConfig)
     jev_paper: JevPaperConfig = Field(default_factory=JevPaperConfig)

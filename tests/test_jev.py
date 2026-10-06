@@ -8,8 +8,6 @@ import pytest
 from jevtrade.config import load_config
 from jevtrade.decision.base import JevConfig, default_questions
 from jevtrade.decision.jev import HttpResponse, JevError, JevModel, build_payload
-from jevtrade.decision.log import DecisionLog
-from jevtrade.data.store import connect
 from jevtrade.policy.engine import AccountView, Policy, PolicyConfig, RiskState
 from jevtrade.state.builder import MarketState, estimate_tokens
 
@@ -211,32 +209,6 @@ def test_policy_reads_direction_probabilities_not_noul_values():
         assert a.details == {"p_up": 0.22, "p_down": 0.19}
         actions.append((a.kind, a.reason))
     assert len(set(actions)) == 1  # noul answers do not move the policy
-
-
-def test_every_answer_is_stored_for_calibration():
-    conn = connect(":memory:")
-    m, _, _ = _model(HttpResponse(200, _body()))
-    d = m.decide(_state(), QS)
-    i = DecisionLog(conn).record("paper", "BTC/USDT", 123, d, _state().text)
-    rows = {r[0]: r[1:] for r in conn.execute(
-        "SELECT question, qtype, choice, probabilities, noul, confidence, gate_confidence"
-        " FROM decision_answers WHERE decision_id=? ORDER BY question", (i,))}
-    assert set(rows) == {"direction", "regime", "adverse_move", "clear_signal"}
-    assert rows["direction"][:3] == ("choice", "flat", '{"up": 0.22, "flat": 0.59, "down": 0.19}')
-    assert rows["direction"][4:] == (0.38, 0.38)
-    assert rows["adverse_move"][0] == "noul" and rows["adverse_move"][3] == 0.32
-    assert rows["adverse_move"][5] == pytest.approx(0.36)
-    stored = conn.execute("SELECT model_version, raw_output FROM decisions WHERE id=?",
-                          (i,)).fetchone()
-    assert stored[0] == PINNED and json.loads(stored[1]) == json.loads(_body())
-
-
-def test_abstain_stores_no_answer_rows():
-    conn = connect(":memory:")
-    m, _, _ = _model(HttpResponse(502, "{}"), max_retries=0)
-    i = DecisionLog(conn).record("paper", "BTC/USDT", 1, m.decide(_state(), QS), None)
-    assert conn.execute("SELECT abstain FROM decisions WHERE id=?", (i,)).fetchone() == (1,)
-    assert conn.execute("SELECT COUNT(*) FROM decision_answers").fetchone() == (0,)
 
 
 def test_jev_prompt_doc_matches_default_questions():

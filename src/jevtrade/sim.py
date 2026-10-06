@@ -1,8 +1,6 @@
-"""Simulated account shared by the backtest and the paper loop.
+"""Simulated account behind the dashboard's Jev portfolio (jevtrade.forward.portfolio).
 
-Both loops drive the same `Simulator`, so a bar processed live fills, sizes
-and exits exactly as it would in a backtest. Nothing here talks to an
-exchange: fills are computed from candles.
+Nothing here talks to an exchange: fills are computed from candles.
 
 Per bar t, in order:
 1. `begin_bar`: roll the daily-loss baseline (equity at the previous close).
@@ -12,14 +10,11 @@ Per bar t, in order:
 3. `on_close`, per symbol in `symbols_by_priority`: mark to the close, run
    `Policy.evaluate`, fill a stop inside the bar at `action.fill_price`,
    queue entries and other exits for the next open.
-
-`SimState` round-trips through JSON so the paper loop can persist it.
 """
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Callable
 
 import pandas as pd
@@ -77,23 +72,6 @@ class SimState:
 
     def equity(self) -> float:
         return self.cash + sum(o.pos.qty * self.marks.get(s, o.pos.entry_price) for s, o in self.open.items())
-
-    def to_json(self) -> str:
-        return json.dumps(asdict(self), sort_keys=True)
-
-    @classmethod
-    def from_json(cls, text: str) -> "SimState":
-        d = json.loads(text)
-        return cls(
-            cash=d["cash"],
-            risk=RiskState(**d["risk"]),
-            open={s: OpenPosition(Position(**o["pos"]), o["entry_fee"], o["entry_reason"])
-                  for s, o in d["open"].items()},
-            pending={s: PendingOrder(Action(**p["action"]), p["ref_close"]) for s, p in d["pending"].items()},
-            marks=d["marks"],
-            first_close=d["first_close"],
-            last_bar_ts=d["last_bar_ts"],
-        )
 
 
 class Simulator:
