@@ -19,7 +19,7 @@ from pathlib import Path
 
 from ..config import load_config
 from ..collect.collector import candles_frame, lookback_bars
-from ..data.fetcher import OHLCVSource, fetch_range, has_deep_history, page_limit_for, public_exchange
+from ..data.fetcher import OHLCVSource, fetch_range, public_exchange
 from ..data.timeframes import last_closed_open_ms, timeframe_ms
 from ..features.compute import compute_features
 from ..state.builder import MarketState, build_state
@@ -32,7 +32,7 @@ def latest_state(cfg, source: OHLCVSource, symbol: str, now_ms: int):
     tf_ms = timeframe_ms(d.timeframe)
     latest = last_closed_open_ms(now_ms, tf_ms)
     rows = fetch_range(source, symbol, d.timeframe, latest - lookback_bars(cfg, 1) * tf_ms, latest, tf_ms,
-                       page_limit_for(d.exchange, d.page_limit), skip_empty=has_deep_history(d.exchange))
+                       d.page_limit)
     candles = candles_frame(rows)
     if candles.empty:
         return candles, None

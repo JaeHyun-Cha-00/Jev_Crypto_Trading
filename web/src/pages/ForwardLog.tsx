@@ -119,7 +119,7 @@ export function ForwardLog({ summary, rows, symbol, error, horizon }: {
       <p className="muted small">
         {summary?.source === "off"
           ? "Turned off (forward_log.source: off)."
-          : <>Live hourly Jev calls from the collect workflow ({summary?.location ?? "data-log"}), scored when each horizon closes.
+          : <>Jev's hourly calls, each scored once the {horizon} hours it asked about have passed.
             {" "}Last call {ago(summary?.last_called_at ?? null).text}.</>}
       </p>
       {(error || summary?.error) && (

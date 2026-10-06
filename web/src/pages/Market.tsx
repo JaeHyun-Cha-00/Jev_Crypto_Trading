@@ -57,8 +57,8 @@ function Range({ c }: { c: LiveCoin }) {
 
 function JevBadge({ j }: { j?: JevCoin }) {
   if (!j) return <span className="muted">–</span>;
-  if (j.holding) return <span className="tag enter" title="Jev's paper portfolio holds it">holding</span>;
-  if (j.buying) return <span className="tag" title="Jev's paper portfolio is buying it next hour">buying</span>;
+  if (j.holding) return <span className="tag enter" title="Jev's portfolio holds it">holding</span>;
+  if (j.buying) return <span className="tag" title="Jev's portfolio is buying it next hour">buying</span>;
   const a = j.last;
   if (!a || a.status !== "answered") return <span className="muted">–</span>;
   return (

@@ -1,12 +1,13 @@
-"""Coinbase (api.exchange.coinbase.com) as the default exchange: windowed
-pagination over deep history, with Kraken kept as a config option."""
+"""Coinbase (api.exchange.coinbase.com), the only exchange: windowed
+pagination over deep history."""
 
 import ccxt
 
 from jevtrade.config import load_config
-from jevtrade.data.fetcher import (
-    fetch_range, has_deep_history, page_limit_for, public_exchange,
-)
+import pytest
+from pydantic import ValidationError
+
+from jevtrade.data.fetcher import PAGE_CAP, fetch_range, public_exchange
 
 from conftest import H, T0, WindowedSource, synthetic_candles
 
@@ -21,24 +22,15 @@ def test_default_config_is_coinbase_usd():
     assert syms[:2] == ["BTC/USD", "ETH/USD"]
     assert len(syms) == len(set(syms)) and all(s.endswith("/USD") for s in syms)
     assert not {"USDC/USD", "USDT/USD", "PAXG/USD"} & set(syms)  # no pegged coins
-    assert page_limit_for(cfg.data.exchange, cfg.data.page_limit) == 300
+    assert cfg.data.page_limit == PAGE_CAP == 300
 
 
-def test_kraken_still_selectable(tmp_path):
-    p = tmp_path / "k.yaml"
-    p.write_text("data:\n  exchange: kraken\n  page_limit: 720\n")
-    cfg = load_config(p)
-    assert cfg.data.exchange == "kraken"
-    assert not has_deep_history("kraken")
-    assert page_limit_for("kraken", 1000) == 720
-    assert public_exchange("kraken").id == "kraken"
-
-
-def test_page_limit_clamped_to_exchange_cap():
-    assert page_limit_for("coinbaseexchange", 720) == 300
-    assert page_limit_for("coinbaseexchange", 100) == 100
-    assert page_limit_for("someexchange", 1000) == 1000
-    assert has_deep_history("coinbaseexchange")
+@pytest.mark.parametrize("yaml_text", ["data:\n  exchange: kraken\n", "data:\n  page_limit: 720\n"])
+def test_only_coinbase_and_its_page_size_are_accepted(tmp_path, yaml_text):
+    p = tmp_path / "c.yaml"
+    p.write_text(yaml_text)
+    with pytest.raises(ValidationError):
+        load_config(p)
 
 
 def test_public_coinbase_client_hits_exchange_api_without_credentials():
@@ -50,7 +42,7 @@ def test_public_coinbase_client_hits_exchange_api_without_credentials():
 def test_backfills_a_year_through_300_candle_windows():
     n = YEAR + 50
     src = WindowedSource(synthetic_candles(n))
-    out = fetch_range(src, SYM, TF, T0, T0 + (n - 1) * H, H, 300, skip_empty=True)
+    out = fetch_range(src, SYM, TF, T0, T0 + (n - 1) * H, H, 300)
     ts = [c[0] for c in out]
     assert len(ts) == n and ts[0] == T0 and ts[-1] == T0 + (n - 1) * H
     assert src.calls == -(-n // 300)  # one request per window
@@ -62,17 +54,9 @@ def test_empty_window_does_not_stop_pagination():
     n = 2000
     missing = {T0 + i * H for i in range(500, 1200)}  # 700 candles > 300 window
     src = WindowedSource(synthetic_candles(n), missing)
-    out = fetch_range(src, SYM, TF, T0, T0 + (n - 1) * H, H, 300, skip_empty=True)
+    out = fetch_range(src, SYM, TF, T0, T0 + (n - 1) * H, H, 300)
     assert out[-1][0] == T0 + (n - 1) * H
     assert len(out) == n - 700
-
-
-def test_without_deep_history_an_empty_window_stops():
-    """The old behaviour, kept for capped-history exchanges like Kraken."""
-    missing = {T0 + i * H for i in range(0, 300)}
-    out = fetch_range(WindowedSource(synthetic_candles(600), missing), SYM, TF,
-                      T0, T0 + 599 * H, H, 300, skip_empty=False)
-    assert out == []
 
 
 def test_ccxt_coinbase_request_shape_and_parsing(monkeypatch):
@@ -96,7 +80,7 @@ def test_ccxt_coinbase_request_shape_and_parsing(monkeypatch):
         return [[c[0] // 1000, *(float(c[k]) for k in (3, 2, 1, 4, 5))] for c in reversed(rows)]
 
     monkeypatch.setattr(ex, "publicGetProductsIdCandles", fake_candles)
-    out = fetch_range(ex, "BTC/USD", "1h", T0, T0 + 699 * H, H, 300, skip_empty=True)
+    out = fetch_range(ex, "BTC/USD", "1h", T0, T0 + 699 * H, H, 300)
 
     assert [c[0] for c in out] == [c[0] for c in candles]
     assert out[0][1:5] == candles[0][1:5]  # open, high, low, close in ccxt order
@@ -116,3 +100,10 @@ def test_requests_trust_env_is_configurable(tmp_path):
     assert cfg.data.requests_trust_env is False
     ex = public_exchange(cfg.data.exchange, cfg.data.requests_trust_env)
     assert ex.session.trust_env is False
+
+
+def test_a_misspelled_config_key_fails_loudly(tmp_path):
+    p = tmp_path / "typo.yaml"
+    p.write_text("policy:\n  max_gross_exposre: 1.0\n")
+    with pytest.raises(ValidationError, match="max_gross_exposre"):
+        load_config(p)

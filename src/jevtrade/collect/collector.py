@@ -36,7 +36,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..data.fetcher import OHLCVSource, fetch_range, has_deep_history, page_limit_for
+from ..data.fetcher import OHLCVSource, fetch_range
 from ..data.timeframes import last_closed_open_ms, ms_to_iso, timeframe_ms
 from ..decision.base import Decision, DecisionModel, QuestionSpec
 from ..features.compute import compute_features
@@ -264,8 +264,7 @@ class Collector:
         d = self.cfg.data
         lookback = lookback_bars(self.cfg, self.max_backfill)
         rows = fetch_range(self.source, symbol, d.timeframe, latest - lookback * self.tf_ms,
-                           latest, self.tf_ms, page_limit_for(d.exchange, d.page_limit),
-                           skip_empty=has_deep_history(d.exchange))
+                           latest, self.tf_ms, d.page_limit)
         return candles_frame(rows) if rows else candles_frame([])
 
     def run(self, now_ms: int | None = None) -> CollectResult:

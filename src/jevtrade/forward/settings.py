@@ -6,12 +6,13 @@ import math
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ForwardLogConfig(BaseModel):
     """Where the API reads the hourly collector's JSONL (the `data-log` branch)."""
 
+    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
     source: Literal["github", "local", "off"] = "github"
     repo: str = "JaeHyun-Cha-00/jev_crypto_trading"   # owner/name on github.com
     branch: str = "data-log"
@@ -41,6 +42,7 @@ class JevPaperConfig(BaseModel):
     last 24 logged hours, scaled on a log scale in between).
     """
 
+    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
     initial_equity: float = Field(10_000, gt=0)
     fee_bps: float = Field(60.0, ge=0, lt=10_000)       # per side, on notional (taker fee)
     slippage_bps: float = Field(0.0, ge=0, lt=10_000)   # beyond the spread
