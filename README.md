@@ -6,7 +6,9 @@ Nothing here trades or simulates positions.
 - `decisions/YYYY-MM-DD.jsonl`: one line per Jev call, per symbol and closed 1h
   candle (day = the candle's open time, UTC), with that candle's `open`, `high`,
   `low`, `close` and `volume` (base units; older lines have only `close`) and `called_at`, when the call was made.
-  Lines from 2026-10-05 and 2026-10-06 may also carry a Robinhood quote
+  Lines for the newest candle of a run also carry the coin's Coinbase price at
+  the start of that run (`cb_price`, `cb_price_at`; absent when Coinbase couldn't
+  be read). Lines from 2026-10-05 and 2026-10-06 may carry a Robinhood quote
   (`rh_bid`, `rh_ask`, `rh_quote_at`); it is no longer logged. `status` is `answered`, `abstain`
   (Jev responded but the answer was unusable) or `error` (no response; that
   candle is asked again on a later run). `answers` holds every answer as Jev
