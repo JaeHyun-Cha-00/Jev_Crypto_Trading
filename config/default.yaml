@@ -78,6 +78,11 @@ policy:                      # all risk limits live here, enforced in code
     jev: null                # holds until p(down) >= exit_threshold or the stop
 
 jev_paper:                   # the dashboard's Jev portfolio, replayed from the forward log
+  # The portfolio's own fresh start (candle open, UTC): it replays from here at
+  # its full balance; the accuracy stats keep the log from forward_log.start.
+  # 2026-10-06T17:00Z is the 10:00 PDT candle, so the first decision is at
+  # 11:00 PDT: restarted when max_gross_exposure went from 0.5 to 1.0 (version 1).
+  start: "2026-10-06T17:00:00Z"
   initial_equity: 10000
   # Coinbase Advanced costs: a taker fee on every fill plus half the order-book
   # spread. 0.60% is the taker fee at the lowest volume tier (under $10k a

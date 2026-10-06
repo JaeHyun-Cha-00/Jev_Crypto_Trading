@@ -15,6 +15,10 @@ candle before it (the backfill stops there), and the API ignores earlier lines.
 To restart, move it to a future hour and clear `decisions/` and `outcomes/` on
 `data-log` (archive the old head first).
 
+`jev_paper.start` restarts only the dashboard's portfolio: it replays from that
+hour at its full balance, while the accuracy stats keep the whole log. Use it
+when the trading rules change but Jev's question does not.
+
 No trading and no simulated positions. Calls that got no response at all are
 logged with `status: "error"` and asked again on the next run. The key comes
 from the `OPENROUTER_API_KEY` repository secret (Settings → Secrets and

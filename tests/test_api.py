@@ -141,3 +141,22 @@ def test_start_reads_naive_and_zoned_times():
     assert ForwardLogConfig().start_ms() is None
     z = ForwardLogConfig(start="2026-10-05T07:00:00Z").start_ms()
     assert z == ForwardLogConfig(start="2026-10-05T07:00:00").start_ms() == 1791183600000
+
+
+def test_portfolio_restarts_at_its_own_start_while_accuracy_keeps_the_log(env):
+    from datetime import datetime, timezone
+
+    from jevtrade.forward.log import ForwardLog
+    from jevtrade.forward.settings import ForwardLogConfig
+    from test_forward import FakeGitHub
+
+    cfg, _ = env
+    first = 1791086400000   # first fixture candle, 2026-10-04T04:00Z
+    c2 = cfg.model_copy(deep=True)
+    c2.jev_paper.start = datetime.fromtimestamp((first + 3_600_000) / 1000, tz=timezone.utc)
+    fwd = ForwardLog(ForwardLogConfig(source="github", repo="me/repo"), http_get=FakeGitHub())
+    c = TestClient(create_app(c2, forward_log=fwd))
+    r = c.get("/api/forward/paper").json()
+    assert r["tracking_since"] == first + 3_600_000
+    assert r["actions"] and all(a["bar_ts"] >= first + 3_600_000 for a in r["actions"])
+    assert c.get("/api/forward/summary").json()["overall"]["decisions"] == 7   # the whole log, first hour included

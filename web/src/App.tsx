@@ -187,7 +187,7 @@ function Bought({ paper, symbol, market }: { paper: JevPaper | null; symbol: str
       <div className="card-head">
         <h2>What Jev bought</h2>
         <span className="muted small">
-          {paper?.tracking_since != null && `Since ${fmtTime(paper.tracking_since)} ${TZ}`}
+          {paper?.tracking_since != null && `Since ${fmtTime(paper.tracking_since + HOUR_MS)} ${TZ}`}
         </span>
       </div>
       {count === 0 ? (
@@ -446,16 +446,28 @@ function liveEquity(paper: JevPaper | null, market: LiveMarket): number | null {
   return paper.cash + paper.positions.reduce((sum, p) => sum + p.qty * (market.bySymbol[p.symbol]?.price ?? p.mark), 0);
 }
 
-/** Live equity sampled every few seconds, kept in this browser for a few hours so a reload keeps the line. */
-function useLiveTail(value: number | null): CurvePoint[] {
-  const [tail, setTail] = useState<CurvePoint[]>(() => {
+/** Live equity sampled every few seconds, kept in this browser for a few hours so a reload keeps the line.
+ *  Stored per tracking start, so a fresh start never shows the old account's line. */
+function useLiveTail(value: number | null, since: number | null | undefined): CurvePoint[] {
+  const key = `${LIVE_KEY}:${since ?? "none"}`;
+  const read = (): CurvePoint[] => {
     try {
-      const saved = JSON.parse(localStorage.getItem(LIVE_KEY) ?? "[]");
+      const saved = JSON.parse(localStorage.getItem(key) ?? "[]");
       return Array.isArray(saved) ? saved.filter((p) => typeof p?.bar_ts === "number" && typeof p?.equity === "number") : [];
     } catch {
       return [];
     }
-  });
+  };
+  const [tail, setTail] = useState<CurvePoint[]>(read);
+  useEffect(() => {
+    setTail(read());
+    try {
+      localStorage.removeItem(LIVE_KEY);   // the unkeyed store of earlier versions
+    } catch {
+      /* storage blocked */
+    }
+    // read depends only on key
+  }, [key]);
   const latest = useRef(value);
   latest.current = value;
   useEffect(() => {
@@ -466,7 +478,7 @@ function useLiveTail(value: number | null): CurvePoint[] {
         const now = Date.now();
         const next = [...t.filter((p) => p.bar_ts > now - LIVE_KEEP_MS), { bar_ts: now, equity: v }];
         try {
-          localStorage.setItem(LIVE_KEY, JSON.stringify(next));
+          localStorage.setItem(key, JSON.stringify(next));
         } catch {
           /* storage blocked: the line just starts over on reload */
         }
@@ -474,7 +486,7 @@ function useLiveTail(value: number | null): CurvePoint[] {
       });
     }, LIVE_EVERY_MS);
     return () => clearInterval(id);
-  }, []);
+  }, [key]);
   return tail;
 }
 
@@ -503,17 +515,18 @@ function JevPortfolio({ data, symbol, market }: { data: Data; symbol: string; ma
   const { config, paper } = data;
   const hours = RANGES.find((r) => r.id === range)!.hours;
   const live = liveEquity(paper, market);
-  const tail = useLiveTail(live);
+  const tail = useLiveTail(live, paper?.tracking_since);
   const detail = useDetail(hours, paper?.last_bar_ts);
   // Each hourly point is the account at that hour's close, an hour after the candle opened.
   const hourly = (paper?.curve ?? []).map((p) => ({ ...p, bar_ts: p.bar_ts + HOUR_MS }));
   const history = detail?.length ? detail : hourly;
   const lastKnown = history.length ? history[history.length - 1].bar_ts : -Infinity;
-  const start = paper?.tracking_since != null && hourly.length ? [{ bar_ts: paper.tracking_since, equity: paper.initial_equity }] : [];
+  // The first decision comes as the start candle closes, an hour after it opens.
+  const start = paper?.tracking_since != null && hourly.length ? [{ bar_ts: paper.tracking_since + HOUR_MS, equity: paper.initial_equity }] : [];
   const curve = [
     ...start.filter((p) => !history.length || p.bar_ts < history[0].bar_ts),
     ...history,
-    ...tail.filter((p) => p.bar_ts > lastKnown),
+    ...(history.length ? tail.filter((p) => p.bar_ts > lastKnown) : []),
     ...(live != null && hourly.length ? [{ bar_ts: Date.now(), equity: live }] : []),
   ];
   const cutoff = curve.length ? curve[curve.length - 1].bar_ts - hours * HOUR_MS : 0;
@@ -538,7 +551,7 @@ function JevPortfolio({ data, symbol, market }: { data: Data; symbol: string; ma
         <div className="hero-top">
           <div>
             <div className="hero-label">
-              {paper?.tracking_since != null && <>Tracking since {fmtTime(paper.tracking_since)} {TZ}</>}
+              {paper?.tracking_since != null && <>Tracking since {fmtTime(paper.tracking_since + HOUR_MS)} {TZ}</>}
               {streaming && <span className="live-pip" title="Held coins valued at live Coinbase prices"> · <span className="pip" aria-hidden="true" />Live</span>}
             </div>
             <div className="balance">

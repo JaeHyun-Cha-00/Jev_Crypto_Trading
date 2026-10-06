@@ -9,6 +9,13 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+def _utc_ms(ts: datetime | None) -> int | None:
+    """A config time as UTC milliseconds; a time without a zone is read as UTC."""
+    if ts is None:
+        return None
+    return int((ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)).timestamp() * 1000)
+
+
 class ForwardLogConfig(BaseModel):
     """Where the API reads the hourly collector's JSONL (the `data-log` branch)."""
 
@@ -26,10 +33,7 @@ class ForwardLogConfig(BaseModel):
     start: datetime | None = None
 
     def start_ms(self) -> int | None:
-        if self.start is None:
-            return None
-        ts = self.start if self.start.tzinfo else self.start.replace(tzinfo=timezone.utc)
-        return int(ts.timestamp() * 1000)
+        return _utc_ms(self.start)
 
 
 class JevPaperConfig(BaseModel):
@@ -41,6 +45,10 @@ class JevPaperConfig(BaseModel):
     last 24 logged hours, scaled on a log scale in between).
     """
 
+    # The portfolio's own fresh start (UTC candle open): it replays only lines
+    # from here on, at its full balance, while the accuracy stats keep the whole
+    # log from forward_log.start. None: start with the log.
+    start: datetime | None = None
     initial_equity: float = Field(10_000, gt=0)
     fee_bps: float = Field(60.0, ge=0, lt=10_000)       # per side, on notional (taker fee)
     slippage_bps: float = Field(0.0, ge=0, lt=10_000)   # beyond the spread
@@ -59,6 +67,9 @@ class JevPaperConfig(BaseModel):
     # `gate_min_signals` of them have. null = no gate.
     gate_lookback_hours: int | None = Field(None, ge=1)
     gate_min_signals: int = Field(30, ge=1)
+
+    def start_ms(self) -> int | None:
+        return _utc_ms(self.start)
 
     def spread_for(self, dollar_volume: float | None) -> float:
         """Per-side spread in bps for a coin trading `dollar_volume` an hour; unknown pays the most."""
