@@ -62,6 +62,22 @@ def _f(v) -> float | None:
         return None
 
 
+def coinbase_prices(symbols: list[str], http_get: HttpGet | None = None,
+                    base_url: str = "https://api.exchange.coinbase.com", timeout_s: float = 20.0) -> dict[str, float]:
+    """Symbol -> Coinbase's last trade price right now, for every listed symbol, in one call."""
+    body = (http_get or net.get)(base_url.rstrip("/") + "/products/stats",
+                                 {"Accept": "application/json", "User-Agent": "jevtrade-collect"}, timeout_s)
+    stats = json.loads(body)
+    if not isinstance(stats, dict):
+        raise MarketError("unexpected /products/stats payload")
+    out = {}
+    for s in symbols:
+        last = _f(((stats.get(product_id(s)) or {}).get("stats_24hour") or {}).get("last"))
+        if last is not None and last > 0:
+            out[s] = last
+    return out
+
+
 def coin_row(symbol: str, stats: dict | None, spark: list[float] | None, name: str | None = None) -> dict:
     """One line of the price list from Coinbase's 24-hour stats."""
     s = (stats or {}).get("stats_24hour") or {}

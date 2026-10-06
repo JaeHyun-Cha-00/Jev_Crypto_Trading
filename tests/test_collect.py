@@ -47,12 +47,13 @@ class MultiSource(WindowedSource):
         return super().fetch_ohlcv(symbol, timeframe, since, limit)
 
 
-def _collector(tmp_path, transport, source=None, max_backfill=24, symbols=("BTC/USD", "ETH/USD"), start=None):
+def _collector(tmp_path, transport, source=None, max_backfill=24, symbols=("BTC/USD", "ETH/USD"), start=None,
+               prices=None):
     cfg = load_config()
     cfg.data.symbols = list(symbols)
     cfg.forward_log.start = start   # the default fresh-start date is after the synthetic candles
     model = JevModel(JevConfig(max_retries=0), transport=transport, sleep=lambda s: None)
-    return Collector(cfg, model, source or MultiSource(), tmp_path, max_backfill=max_backfill)
+    return Collector(cfg, model, source or MultiSource(), tmp_path, max_backfill=max_backfill, prices=prices)
 
 
 def _now(last_closed_index: int) -> int:
@@ -267,4 +268,41 @@ def test_each_run_writes_one_gzip_member(tmp_path):
     d = zlib.decompressobj(16 + zlib.MAX_WBITS)
     assert len(d.decompress(p.read_bytes()).splitlines()) == 2
     assert d.eof and d.unused_data == b""   # nothing after the first member
+
+
+def test_coinbase_price_goes_on_the_newest_candle_only(tmp_path):
+    asked = []
+
+    def prices(symbols):
+        asked.append(symbols)
+        return {"BTC/USD": 101.5}
+
+    _collector(tmp_path, Transport(), max_backfill=3, prices=prices).run(_now(N - 2))
+    assert asked == [["BTC/USD", "ETH/USD"]]   # one price call per run
+    recs = _decisions(tmp_path)
+    priced = [r for r in recs if "cb_price" in r]
+    newest = max(r["candle_ts"] for r in recs)
+    assert [(r["symbol"], r["candle_ts"]) for r in priced] == [("BTC/USD", newest)]
+    assert priced[0]["cb_price"] == 101.5 and priced[0]["cb_price_at"].endswith("Z")
+
+
+def test_coinbase_outage_never_stops_a_run(tmp_path):
+    def prices(symbols):
+        raise OSError("coinbase down")
+
+    res = _collector(tmp_path, Transport(), max_backfill=2, prices=prices).run(_now(N - 2))
+    assert len(res.called) == 4 and not any("cb_price" in r for r in _decisions(tmp_path))
+
+
+def test_coinbase_prices_reads_every_symbol_in_one_call():
+    from jevtrade.data.market import coinbase_prices
+    calls = []
+
+    def get(url, headers, timeout_s):
+        calls.append(url)
+        return json.dumps({"BTC-USD": {"stats_24hour": {"last": "85000.5"}},
+                           "ETH-USD": {"stats_24hour": {"last": "0"}}}).encode()
+
+    assert coinbase_prices(["BTC/USD", "ETH/USD", "SOL/USD"], http_get=get) == {"BTC/USD": 85000.5}
+    assert calls == ["https://api.exchange.coinbase.com/products/stats"]
 

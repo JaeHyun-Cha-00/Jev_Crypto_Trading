@@ -3,6 +3,9 @@
 `.github/workflows/collect.yml` runs at 1 minute past every hour (and on
 demand via **Run workflow**). Each run:
 
+- reads every coin's current Coinbase price in one call and logs it on the
+  newest candle's line (`cb_price`, `cb_price_at`), so the dashboard's
+  portfolio fills a decision right away at the price it was made at;
 - fetches recent public 1h candles from Coinbase for every coin in `data.symbols`;
 - asks Jev (the pinned snapshot) the configured questions once for each closed
   candle that has no answer logged yet, looking back at most 24 candles, so a

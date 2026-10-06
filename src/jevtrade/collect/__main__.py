@@ -17,6 +17,7 @@ import os
 
 from ..config import load_config
 from ..data.fetcher import public_exchange
+from ..data.market import coinbase_prices
 from ..decision.jev import JevModel
 from .collector import Collector
 
@@ -41,7 +42,7 @@ def main() -> None:
 
     source = public_exchange(cfg.data.exchange, cfg.data.requests_trust_env)
     res = Collector(cfg, JevModel(cfg.decision.jev), source, args.out,
-                    max_backfill=args.max_backfill).run()
+                    max_backfill=args.max_backfill, prices=coinbase_prices).run()
     print(f"jev_calls={len(res.called)} errors={len(res.errors)} "
           f"outcomes={len(res.outcomes)} failed_symbols={len(res.failed_symbols)} "
           f"cost_usd={res.cost_usd:.6f}")

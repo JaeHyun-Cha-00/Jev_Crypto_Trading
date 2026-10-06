@@ -21,6 +21,11 @@ Once a decision's horizon has closed, the realized outcome (close-to-close
 change, direction label, deepest dip below the decision close) goes to
 `<out>/outcomes/<YYYY-MM-DD>.jsonl`, keyed the same way. Nothing here trades
 or simulates positions.
+
+With a `prices` source, each run also reads every coin's Coinbase price once,
+before asking Jev, and logs it on that run's newest-candle lines (`cb_price`,
+`cb_price_at`), so the dashboard's replay fills a decision right away at the
+price it was made at.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 
@@ -56,7 +62,9 @@ Nothing here trades or simulates positions.
 - `decisions/YYYY-MM-DD.jsonl`: one line per Jev call, per symbol and closed 1h
   candle (day = the candle's open time, UTC), with that candle's `open`, `high`,
   `low`, `close` and `volume` (base units; older lines have only `close`) and `called_at`, when the call was made.
-  Lines from 2026-10-05 and 2026-10-06 may also carry a Robinhood quote
+  Lines for the newest candle of a run also carry the coin's Coinbase price at
+  the start of that run (`cb_price`, `cb_price_at`; absent when Coinbase couldn't
+  be read). Lines from 2026-10-05 and 2026-10-06 may carry a Robinhood quote
   (`rh_bid`, `rh_ask`, `rh_quote_at`); it is no longer logged. `status` is `answered`, `abstain`
   (Jev responded but the answer was unusable) or `error` (no response; that
   candle is asked again on a later run). `answers` holds every answer as Jev
@@ -171,11 +179,13 @@ def candles_frame(rows: list[list[float]]) -> pd.DataFrame:
 
 
 def decision_record(symbol: str, ts: int, close: float, d: Decision, qhash: str,
-                    called_at_ms: int, candle: dict | None = None) -> dict:
+                    called_at_ms: int, candle: dict | None = None, price: dict | None = None) -> dict:
     """One decision line; the state text goes to `StateLog` (see `state_record`).
 
     `candle` adds the candle's open, high, low and volume beside `close`, so the
     dashboard's replay can trigger stops on intrabar lows and size by volume.
+    `price` ({"price", "at"}) adds the coin's Coinbase price when the run asked,
+    as `cb_price` and `cb_price_at`.
     """
     if not d.abstain:
         status = "answered"
@@ -192,6 +202,7 @@ def decision_record(symbol: str, ts: int, close: float, d: Decision, qhash: str,
         "close": close,
         **{k: (candle or {}).get(k) for k in ("open", "high", "low", "volume")},
         "called_at": ms_to_iso(called_at_ms),
+        **({"cb_price": price["price"], "cb_price_at": ms_to_iso(price["at"])} if price else {}),
         "status": status,
         "abstain_reason": d.abstain_reason,
         "requested_model": x.get("requested_model"),
@@ -246,8 +257,9 @@ def outcome_record(dec: dict, df: pd.DataFrame, tf_ms: int, horizon: int,
 
 class Collector:
     def __init__(self, app_cfg, model: DecisionModel, source: OHLCVSource, out_dir: str | Path,
-                 max_backfill: int = 24):
+                 max_backfill: int = 24, prices: Callable[[list[str]], dict[str, float]] | None = None):
         self.cfg = app_cfg
+        self.prices = prices
         self.model = model
         self.source = source
         self.out = Path(out_dir)
@@ -287,6 +299,13 @@ class Collector:
         have_outcome = {(r["symbol"], r["candle_ts"]) for r in self.outcomes.read(oldest, latest)}
 
         res = CollectResult()
+        prices: dict[str, dict] = {}
+        if self.prices is not None:
+            at = int(time.time() * 1000)
+            try:
+                prices = {s: {"price": p, "at": at} for s, p in self.prices(list(self.cfg.data.symbols)).items()}
+            except Exception as e:  # noqa: BLE001 - the replay falls back to the hour's candle
+                log.warning("Coinbase prices unavailable: %s", e)
         # One gzip member per run: a member per call compresses about 2.5x worse.
         states: list[dict] = []
         try:
@@ -304,7 +323,7 @@ class Collector:
                     continue
                 feats = compute_features(df, self.cfg.features)
                 pos = {int(ix.value // 1_000_000): i for i, ix in enumerate(df.index)}
-                self._decide(sym, df, feats, pos, first, latest, done, logged, states, res)
+                self._decide(sym, df, feats, pos, first, latest, done, logged, states, res, prices.get(sym))
 
                 for rec in logged:
                     key = (rec["symbol"], rec["candle_ts"])
@@ -321,8 +340,13 @@ class Collector:
         return res
 
     def _decide(self, sym: str, df: pd.DataFrame, feats, pos: dict[int, int], first: int, latest: int,
-                done: set, logged: list[dict], states: list[dict], res: CollectResult) -> None:
-        """Ask Jev about every candle of `sym` in [first, latest] not yet answered."""
+                done: set, logged: list[dict], states: list[dict], res: CollectResult,
+                price: dict | None = None) -> None:
+        """Ask Jev about every candle of `sym` in [first, latest] not yet answered.
+
+        `price` goes only on the `latest` candle's line: older candles being
+        backfilled were decided on hours ago, at other prices.
+        """
         horizon = self.cfg.decision.horizon_bars
         for ts in range(first, latest + 1, self.tf_ms):
             if (sym, ts) in done or ts not in pos:
@@ -337,7 +361,8 @@ class Collector:
             d = self.model.decide(state, self.questions)
             bar = df.iloc[i]
             rec = decision_record(sym, ts, float(bar["close"]), d, self.qhash, int(time.time() * 1000),
-                                  {k: float(bar[k]) for k in ("open", "high", "low", "volume")})
+                                  {k: float(bar[k]) for k in ("open", "high", "low", "volume")},
+                                  price if ts == latest else None)
             self.decisions.append(rec)
             states.append(state_record(rec, state.text))
             logged.append(rec)
