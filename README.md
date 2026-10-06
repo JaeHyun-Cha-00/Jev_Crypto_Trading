@@ -70,8 +70,9 @@ Simulated with fake money; nothing here places orders.
   or the price falls 8% below the buy. There is no time limit.
 - **Costs** are Coinbase Advanced's: a 0.60% taker fee per side plus an
   estimated spread, about 1.2–1.8% a round trip.
-- It starts at $10,000 from `jev_paper.start`; the settings are under `policy`
-  and `jev_paper` in `config/default.yaml`.
+- It starts at $10,000 from `forward_log.start` (the first decision is an hour
+  later, as that candle closes); the settings are under `policy` and
+  `jev_paper` in `config/default.yaml`.
 
 ## Live website
 

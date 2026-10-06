@@ -78,7 +78,7 @@ export function EquityChart({ points, initial }: { points: CurvePoint[]; initial
         ref={svgRef}
         viewBox={`0 0 ${W} ${H}`}
         role="img"
-        aria-label="Paper equity per bar"
+        aria-label="Account value over time"
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
       >

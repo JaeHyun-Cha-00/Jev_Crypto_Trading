@@ -68,9 +68,7 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | 
     def paper_replay() -> dict:
         snap = fwd.snapshot()
         if paper_cache.get("snap") is not snap:   # replay once per forward-log refresh
-            # The portfolio may restart later than the log (jev_paper.start); the later one wins.
-            starts = [t for t in (app_cfg.forward_log.start_ms(), app_cfg.jev_paper.start_ms()) if t is not None]
-            start = max(starts) if starts else None
+            start = app_cfg.forward_log.start_ms()
             rows = snap.rows if start is None else [r for r in snap.rows if r["candle_ts"] >= start]
             out = replay(rows, app_cfg, timeframe_ms(app_cfg.data.timeframe))
             out["tracking_since"] = start if start is not None else (out["curve"][0]["bar_ts"] if out["curve"] else None)

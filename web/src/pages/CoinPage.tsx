@@ -84,7 +84,7 @@ function JevPanel({ symbol, coin, paper, rows }: { symbol: string; coin?: LiveCo
     <section className="card">
       <div className="card-head">
         <h2>Jev on {base}</h2>
-        <span className="muted small">Paper portfolio, simulated fills</span>
+        <span className="muted small">Simulated portfolio, no real orders</span>
       </div>
       <div className="tiles inner">
         <div className="tile">
@@ -293,7 +293,7 @@ export function CoinPage({
             </div>
           </div>
           <CandleChart symbol={symbol} timeframe={tf} theme={theme} marks={marks} lines={lines} />
-          <p className="muted small">Coinbase {symbol} candles in your local time. Arrows mark Jev's paper buys and sells.</p>
+          <p className="muted small">Coinbase {symbol} candles in your local time. Arrows mark Jev's buys and sells.</p>
         </section>
         <section className="card book-card">
           <div className="seg wide" role="tablist" aria-label="Order book or trades">

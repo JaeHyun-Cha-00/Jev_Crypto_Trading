@@ -819,13 +819,20 @@ export default function App() {
     <>
       <header className="topbar">
         <div className="topbar-inner">
-          <a className="brand" href="#/" aria-label="Jev portfolio">
-            <span className="logo" aria-hidden="true">J</span>
-            <h1>Jev</h1>
-            <span className="badge" title="Simulated fills, never real orders">PAPER</span>
+          <a className="brand" href="#/" aria-label="Jev Crypto Trading: portfolio">
+            <span className="logo" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 16.5l4.5-4.5 3.5 3.5L19.5 8" />
+                <path d="M14.5 8h5v5" />
+              </svg>
+            </span>
+            <h1 className="wordmark">
+              <span className="wordmark-name">Jev</span>
+              <span className="wordmark-rest">Crypto Trading</span>
+            </h1>
           </a>
           <nav className="tabs" aria-label="View">
-            <a href="#/" className={tab === "jev" ? "on" : ""} aria-current={tab === "jev" ? "page" : undefined}>Jev portfolio</a>
+            <a href="#/" className={tab === "jev" ? "on" : ""} aria-current={tab === "jev" ? "page" : undefined}>Portfolio</a>
             <a href="#/market" className={tab === "market" ? "on" : ""} aria-current={tab === "market" ? "page" : undefined}>Market</a>
           </nav>
           <span className="spacer" />
