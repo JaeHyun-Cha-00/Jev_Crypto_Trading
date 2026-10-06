@@ -1,10 +1,10 @@
 name: tests
 
-# Private repo: every job is billed in whole minutes against the monthly free
-# Actions allowance, which the hourly collect run also needs (~1,500 min/month).
-# So: one run per change (PRs, plus the merge to main, not every branch push),
-# superseded runs cancelled, docs-only changes skipped, and the Docker builds
-# only when something they copy in could break them.
+# One run per change (PRs, plus the merge to main, not every branch push),
+# superseded runs cancelled, docs-only changes skipped, and the Docker build
+# only when something it copies in could break it (docker.yml). The repo is
+# public, so Actions minutes are free; this just keeps the queue short for the
+# hourly collect run.
 on:
   push:
     branches: [main]

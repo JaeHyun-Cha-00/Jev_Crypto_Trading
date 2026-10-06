@@ -19,7 +19,7 @@ import threading
 import time
 from typing import Callable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .. import net
 from ..net import HttpGet, redact
@@ -28,6 +28,7 @@ from ..net import HttpGet, redact
 class MarketConfig(BaseModel):
     """Live prices for the dashboard's coin list (jevtrade.data.market): public Coinbase data only."""
 
+    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
     enabled: bool = True
     base_url: str = "https://api.exchange.coinbase.com"
     stats_seconds: float = Field(5, ge=1)        # re-read 24-hour stats for all coins at most this often

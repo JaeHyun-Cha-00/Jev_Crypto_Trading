@@ -94,7 +94,9 @@ def test_entries_go_to_the_strongest_edge_not_alphabetical_order():
             row("MMM/USD", 0, 10.0, up=0.70, down=0.05),   # edge 0.65
             row("ZZZ/USD", 0, 10.0, up=0.80, down=0.00)]   # edge 0.80
     rows += [row(s, 1, 10.0) for s in ("AAA/USD", "MMM/USD", "ZZZ/USD")]
-    r = run(rows)
+    cfg = old_costs()
+    cfg.policy = cfg.policy.model_copy(update={"max_gross_exposure": 0.5})
+    r = run(rows, cfg)
     hour0 = [a for a in reversed(r["actions"]) if a["bar_ts"] == T0]
     assert [a["symbol"] for a in hour0] == ["ZZZ/USD", "MMM/USD", "AAA/USD"]
     bought = {a["symbol"]: a["size_frac"] for a in hour0 if a["action"] == "enter"}

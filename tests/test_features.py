@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from jevtrade.features.compute import FeatureConfig, compute_features, max_lookback, rsi
+from jevtrade.features.compute import FeatureConfig, compute_features, rsi
 
 from conftest import synthetic_candles
 
@@ -35,7 +35,8 @@ def test_features_unchanged_when_future_perturbed():
 
 def test_all_features_defined_after_lookback():
     f = compute_features(_df(400))
-    lb = max_lookback()
+    c = FeatureConfig()   # the longest window sets when every feature is defined
+    lb = max(max(c.return_windows), max(c.vol_windows) + 1, c.volume_z_window, c.rsi_period + 1, max(c.ma_windows))
     assert f.iloc[lb:].notna().all().all()
     assert f.iloc[: lb - 1].isna().any(axis=1).all()
 

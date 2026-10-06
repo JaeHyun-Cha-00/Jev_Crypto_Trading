@@ -2,7 +2,7 @@
 # variables (see .env.example).
 
 data:
-  exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken (latest 720 candles only)
+  exchange: coinbaseexchange # api.exchange.coinbase.com, the only exchange supported
   # The coins Jev is asked about every hour and the dashboard lists, all with a
   # Coinbase USD market (no stablecoins or PAXG). Fixed so Jev is measured on
   # the same coins every day: edit this list to add or drop one. A coin
@@ -23,7 +23,7 @@ data:
     SKR/USD, MEGA/USD, SENT/USD, CHIP/USD, FLR/USD, RE/USD, BILL/USD, MON/USD,
   ]
   timeframe: 1h
-  page_limit: 300            # clamped per exchange: coinbase 300, kraken 720
+  page_limit: 300            # candles per request; Coinbase serves at most 300
   requests_trust_env: true   # use HTTPS_PROXY / REQUESTS_CA_BUNDLE from the environment
 
 features:

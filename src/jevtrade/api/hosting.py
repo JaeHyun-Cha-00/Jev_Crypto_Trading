@@ -7,7 +7,7 @@ when the matching environment variable is set:
   with unknown paths falling back to index.html.
 - DASHBOARD_PASSWORD: HTTP basic auth on every route except /api/health (the
   host's health check and the keep-alive ping). Any user name works. Without
-  it a hosted dashboard would show the private forward log to anyone.
+  it anyone with the URL could open the dashboard.
 - JEVTRADE_KICK=1: run the collect backstop (jevtrade.collect.kick) in a
   background thread, at minute JEVTRADE_KICK_MINUTE (default 3), so the
   hourly run starts even when GitHub's schedule skips it.

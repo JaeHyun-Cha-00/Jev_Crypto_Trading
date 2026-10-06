@@ -57,7 +57,8 @@ def test_abstain_and_missing_decision_are_no_trade(pol):
     assert pol.evaluate(SYM, T0, 100.0, None, acct()).reason.startswith("no_decision")
 
 
-def test_gross_exposure_cap_limits_size(pol):
+def test_gross_exposure_cap_limits_size():
+    pol = Policy(PolicyConfig(max_gross_exposure=0.5), H)
     other = {"ETH/USDT": Position("ETH/USDT", 40.0, 100.0, T0, 90.0)}  # 4000 / 10000 = 40%
     a = pol.evaluate(SYM, T0, 100.0, dec(up=0.7), acct(positions=other, marks={"ETH/USDT": 100.0}))
     assert a.kind == "enter" and a.size_frac == pytest.approx(0.10)

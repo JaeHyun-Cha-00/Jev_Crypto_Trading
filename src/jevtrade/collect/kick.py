@@ -1,17 +1,17 @@
 """Hourly backstop for the collect workflow's GitHub schedule.
 
-GitHub may delay or skip scheduled runs. This loop, run next to the API on an
-always-on box, asks GitHub from minute `--minute` of every hour on whether a
-collect run already started this hour, and starts one with workflow_dispatch
-only if none did. It re-checks the clock every few minutes, so an hour is
-still covered when the box slept through `--minute` or the container restarted
-after it. It calls nothing but the GitHub API; the run itself (and
+GitHub may delay or skip scheduled runs. This loop asks GitHub from minute
+`--minute` of every hour on whether a collect run already started this hour,
+and starts one with workflow_dispatch only if none did. The hosted dashboard
+runs it in a background thread (JEVTRADE_KICK=1, jevtrade.api.hosting); it can
+also run on its own. It re-checks the clock every few minutes, so an hour is
+still covered when the host slept through `--minute` or restarted after it. It calls nothing but the GitHub API; the run itself (and
 every Jev call) happens in GitHub Actions, as with the schedule.
 
     python -m jevtrade.collect.kick [--minute 1] [--once]
 
 Needs $GITHUB_TOKEN with "Actions: read and write" on the repo (a fine-grained
-token; add "Contents: read" so the API's forward log keeps working).
+token; "Contents: read" too lifts GitHub's rate limit on the API's forward log).
 """
 
 from __future__ import annotations

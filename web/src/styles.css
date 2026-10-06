@@ -198,9 +198,6 @@ td.picks-cell { white-space: normal; min-width: 260px; max-width: 420px; }
 .pending { margin-top: 12px; }
 
 .days { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-wrap: wrap; gap: 6px; }
-.link { background: var(--surface-2); border: 1px solid transparent; border-radius: 8px; padding: 4px 10px; cursor: pointer; font-variant-numeric: tabular-nums; }
-.link:hover { border-color: var(--border); }
-.link.on { background: var(--wash); color: var(--accent); font-weight: 600; }
 footer { margin-top: 24px; text-align: center; }
 
 /* Jev forward log */

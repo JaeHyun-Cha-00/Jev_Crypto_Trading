@@ -6,7 +6,7 @@ import math
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def _utc_ms(ts: datetime | None) -> int | None:
@@ -19,6 +19,7 @@ def _utc_ms(ts: datetime | None) -> int | None:
 class ForwardLogConfig(BaseModel):
     """Where the API reads the hourly collector's JSONL (the `data-log` branch)."""
 
+    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
     source: Literal["github", "local", "off"] = "github"
     repo: str = "JaeHyun-Cha-00/jev_crypto_trading"   # owner/name on github.com
     branch: str = "data-log"
@@ -45,6 +46,7 @@ class JevPaperConfig(BaseModel):
     last 24 logged hours, scaled on a log scale in between).
     """
 
+    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
     # The portfolio's own fresh start (UTC candle open): it replays only lines
     # from here on, at its full balance, while the accuracy stats keep the whole
     # log from forward_log.start. None: start with the log.

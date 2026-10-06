@@ -14,12 +14,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..decision.base import Decision
 
 
 class PolicyConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
+
     question: str = "direction"
     up_option: str = "up"
     down_option: str = "down"
@@ -33,7 +35,7 @@ class PolicyConfig(BaseModel):
     stop_loss_pct: float = Field(0.03, gt=0, lt=1)
     stop_slippage_bps: float = Field(5.0, ge=0, lt=10_000)  # adverse slippage on stop fills
     max_position_frac: float = Field(0.50, gt=0, le=1)  # per-symbol notional / equity
-    max_gross_exposure: float = Field(0.50, gt=0, le=1)  # all positions / equity
+    max_gross_exposure: float = Field(1.0, gt=0, le=1)   # all positions / equity
     min_trade_frac: float = Field(0.01, gt=0, le=1)
     max_daily_loss_pct: float = Field(0.03, gt=0, lt=1)  # vs equity at UTC day start
     cooldown_after_losses: int = Field(3, ge=1)
