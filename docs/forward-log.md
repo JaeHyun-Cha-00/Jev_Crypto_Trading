@@ -36,13 +36,13 @@ Locally, against any directory:
 python -m jevtrade.collect --out data-log --max-backfill 24
 ```
 
-GitHub can delay or skip scheduled runs. The `collect-kick` service in
-`docker-compose.yml` is a backstop: from 1 minute past each hour it asks GitHub
+GitHub can delay or skip scheduled runs. The Render service runs a backstop
+(`JEVTRADE_KICK=1`, see [deploy.md](deploy.md)): from 3 minutes past each hour it asks GitHub
 whether a collect run started this hour and, if none did, starts one (the run
 still happens in GitHub Actions). It needs `GITHUB_TOKEN` with **Actions: read
 and write** on the repo, plus **Contents: read** for the dashboard; without a
-token it exits and stays stopped. Check it with `docker compose logs collect-kick`,
-or run one check by hand with `python -m jevtrade.collect.kick --once`.
+token it exits and stays stopped. Check it in the Render service's logs, or run
+one check by hand with `python -m jevtrade.collect.kick --once`.
 
 ## Jev forward log on the dashboard
 

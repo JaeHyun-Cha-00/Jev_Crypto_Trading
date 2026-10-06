@@ -1,6 +1,5 @@
 # One container for a public host (render.yaml): the API also serves the built
-# dashboard, behind DASHBOARD_PASSWORD. docker compose keeps using Dockerfile
-# and web/Dockerfile (nginx) on localhost.
+# dashboard, behind DASHBOARD_PASSWORD.
 FROM node:22-alpine AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
@@ -23,7 +22,7 @@ RUN pip install --upgrade pip && pip install '.[api]'
 COPY config ./config
 COPY --from=web /web/dist ./web
 
-RUN useradd --create-home --uid 1000 jev && mkdir -p data reports && chown -R jev:jev data reports
+RUN useradd --create-home --uid 1000 jev
 USER jev
 
 # The host sets $PORT; 8000 otherwise.

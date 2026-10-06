@@ -208,14 +208,14 @@ def test_min_trade_interval_zero_disables():
 
 
 def test_max_holding_per_model():
-    cfg = PolicyConfig(max_holding_bars=4)
-    assert cfg.for_model("mock").max_holding_bars == 4
-    assert cfg.for_model("baseline").max_holding_bars is None
+    cfg = PolicyConfig(max_holding_bars=4, max_holding_bars_by_model={"jev": None})
+    assert cfg.for_model("other").max_holding_bars == 4
+    assert cfg.for_model("jev").max_holding_bars is None
     assert PolicyConfig(max_holding_bars_by_model={"jev": 8}).for_model("jev").max_holding_bars == 8
     with pytest.raises(ValueError):
         PolicyConfig(max_holding_bars_by_model={"jev": 0})
     # No time exit: a position held for 100 bars stays open while the model is not bearish.
-    p = Policy(cfg.for_model("baseline"), H)
+    p = Policy(cfg.for_model("jev"), H)
     pos = Position(SYM, 1.0, 100.0, T0, 97.0)
     a = p.evaluate(SYM, T0 + 100 * H, 100.0, dec(up=1.0), acct(positions={SYM: pos}, marks={SYM: 100.0}))
     assert a.kind == "hold"

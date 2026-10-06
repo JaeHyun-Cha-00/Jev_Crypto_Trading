@@ -1,6 +1,6 @@
 """Jev paper account replayed from the forward log.
 
-Runs the same policy and simulator as the backtest and paper loop over the
+Runs the policy and simulator (jevtrade.policy, jevtrade.sim) over the
 answers Jev already gave in the hourly forward log (jevtrade.forward.log).
 It makes no model calls and no exchange calls: prices come from the log too.
 
@@ -28,8 +28,8 @@ Coinbase volume. Stops pay it too. A buy is also capped at `max_volume_frac`
 of the coin's median hourly dollar volume, so a thin coin gets a small
 position however confident Jev is.
 
-Within an hour, symbols are evaluated in `Simulator.symbols_by_priority`, the
-same order the backtest and paper loop use: held coins first, then by edge
+Within an hour, symbols are evaluated in `Simulator.symbols_by_priority`:
+held coins first, then by edge
 (p_up - p_down), highest first, so when the exposure caps leave room for only
 a few entries the slots go to the coins Jev was most confident about, not the
 alphabetically first ones.

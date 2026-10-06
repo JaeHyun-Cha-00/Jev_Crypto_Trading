@@ -7,17 +7,11 @@ from jevtrade.config import load_config
 from jevtrade.data.fetcher import (
     fetch_range, has_deep_history, page_limit_for, public_exchange,
 )
-from jevtrade.data.store import CandleStore, connect
-from jevtrade.data.sync import sync_symbol
 
 from conftest import H, T0, WindowedSource, synthetic_candles
 
 EX, SYM, TF = "coinbaseexchange", "BTC/USD", "1h"
 YEAR = 366 * 24
-
-
-def _store():
-    return CandleStore(connect(":memory:"))
 
 
 def test_default_config_is_coinbase_usd():
@@ -56,28 +50,21 @@ def test_public_coinbase_client_hits_exchange_api_without_credentials():
 def test_backfills_a_year_through_300_candle_windows():
     n = YEAR + 50
     src = WindowedSource(synthetic_candles(n))
-    store = _store()
-    r = sync_symbol(src, store, EX, SYM, TF, H, T0, now_ms=T0 + n * H,
-                    page_limit=300, deep_history=True)
-    ts = store.timestamps(EX, SYM, TF)
-    assert r.inserted == n and len(ts) == n
-    assert ts[0] == T0 and ts[-1] == T0 + (n - 1) * H
-    assert r.gaps == []
+    out = fetch_range(src, SYM, TF, T0, T0 + (n - 1) * H, H, 300, skip_empty=True)
+    ts = [c[0] for c in out]
+    assert len(ts) == n and ts[0] == T0 and ts[-1] == T0 + (n - 1) * H
     assert src.calls == -(-n // 300)  # one request per window
 
 
 def test_empty_window_does_not_stop_pagination():
     """A no-trade stretch longer than one window (an outage) must be stepped
-    over, then reported as a gap, never ended on or filled in."""
+    over, never ended on or filled in."""
     n = 2000
     missing = {T0 + i * H for i in range(500, 1200)}  # 700 candles > 300 window
     src = WindowedSource(synthetic_candles(n), missing)
-    store = _store()
-    r = sync_symbol(src, store, EX, SYM, TF, H, T0, now_ms=T0 + n * H,
-                    page_limit=300, deep_history=True)
-    assert store.last_ts(EX, SYM, TF) == T0 + (n - 1) * H
-    assert len(store.timestamps(EX, SYM, TF)) == n - 700
-    assert len(r.gaps) == 1 and r.gaps[0].missing == 700
+    out = fetch_range(src, SYM, TF, T0, T0 + (n - 1) * H, H, 300, skip_empty=True)
+    assert out[-1][0] == T0 + (n - 1) * H
+    assert len(out) == n - 700
 
 
 def test_without_deep_history_an_empty_window_stops():
@@ -86,19 +73,6 @@ def test_without_deep_history_an_empty_window_stops():
     out = fetch_range(WindowedSource(synthetic_candles(600), missing), SYM, TF,
                       T0, T0 + 599 * H, H, 300, skip_empty=False)
     assert out == []
-
-
-def test_head_backfilled_when_start_moves_earlier():
-    n = YEAR
-    all_c = synthetic_candles(n)
-    store = _store()
-    store.upsert(EX, SYM, TF, all_c[-100:])  # e.g. a store first synced recently
-    src = WindowedSource(all_c)
-    r = sync_symbol(src, store, EX, SYM, TF, H, T0, now_ms=T0 + n * H,
-                    page_limit=300, deep_history=True)
-    assert store.timestamps(EX, SYM, TF)[0] == T0
-    assert len(store.timestamps(EX, SYM, TF)) == n
-    assert r.inserted == n - 100 and r.gaps == []
 
 
 def test_ccxt_coinbase_request_shape_and_parsing(monkeypatch):

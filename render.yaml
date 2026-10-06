@@ -20,6 +20,6 @@ services:
       - key: JEVTRADE_KICK       # start the hourly collect run if GitHub skipped it
         value: "1"
       - key: JEVTRADE_KICK_MINUTE
-        value: "3"               # after the local collect-kick (:01), so the two never both dispatch
+        value: "3"               # minutes past the hour, just after the :01 schedule should have started
       - key: JEVTRADE_KEEPALIVE_MIN
         value: "10"              # free services sleep after 15 idle minutes; this keeps the kick running
