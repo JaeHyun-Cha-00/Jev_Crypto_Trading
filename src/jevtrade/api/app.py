@@ -17,7 +17,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from ..data.timeframes import timeframe_ms
 from ..forward.log import ForwardLog
-from ..forward.portfolio import replay
+from ..forward.portfolio import detail_curve, replay
 from ..data.market import TIMEFRAMES, Market, MarketError
 from .settings import ApiConfig  # noqa: F401  (re-exported)
 
@@ -65,11 +65,7 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | 
 
     paper_cache: dict = {}
 
-    @app.get("/api/forward/paper")
-    def forward_paper(actions: int = Query(200, ge=0, le=5_000), hours: int = Query(168, ge=0, le=5_000)):
-        """Jev's simulated account: the policy and simulator replayed over the forward log's
-        answers and closes from forward_log.start on. No model or exchange calls;
-        fills are simulated. `actions` and `hours` cap the newest calls and hours returned."""
+    def paper_replay() -> dict:
         snap = fwd.snapshot()
         if paper_cache.get("snap") is not snap:   # replay once per forward-log refresh
             start = app_cfg.forward_log.start_ms()
@@ -77,10 +73,52 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | 
             out = replay(rows, app_cfg, timeframe_ms(app_cfg.data.timeframe))
             out["tracking_since"] = start if start is not None else (out["curve"][0]["bar_ts"] if out["curve"] else None)
             paper_cache.update(snap=snap, out=out)
-        out = dict(paper_cache["out"])
+        return paper_cache["out"]
+
+    @app.get("/api/forward/paper")
+    def forward_paper(actions: int = Query(200, ge=0, le=5_000), hours: int = Query(168, ge=0, le=5_000)):
+        """Jev's simulated account: the policy and simulator replayed over the forward log's
+        answers and closes from forward_log.start on. No model or exchange calls;
+        fills are simulated. `actions` and `hours` cap the newest calls and hours returned."""
+        out = dict(paper_replay())
         out["actions"] = out["actions"][:actions]
         out["hours"] = out["hours"][:hours]
         return out
+
+    @app.get("/api/forward/paper/detail")
+    def forward_paper_detail(hours: float | None = Query(None, gt=0, le=24 * 366,
+                                                         description="newest hours to cover; default all")):
+        """The simulated account at 5-minute (up to 50 hours), 15-minute (up to a week) or hourly
+        steps: each hour's cash and coins valued at Coinbase candle closes."""
+        out = paper_replay()
+        curve = out["curve"]
+        tf_ms = timeframe_ms(app_cfg.data.timeframe)
+        if not curve:
+            return {"step_ms": None, "points": []}
+        end = int(time.time() * 1000)
+        first = out["tracking_since"] or curve[0]["bar_ts"]
+        start = max(first, end - int(hours * 3_600_000)) if hours else first
+        step = next((g for g in (300, 900, 3600) if (end - start) / (g * 1000) <= 600), 3600) * 1000
+        tf = {300_000: "5m", 900_000: "15m", 3_600_000: "1h"}[step]
+        # Coins held at any close in the window, or going into it.
+        closes = [p["bar_ts"] + tf_ms for p in curve]
+        held = {s for p, c in zip(curve, closes) if c > start - tf_ms for s in p.get("holdings") or {}}
+        candles: dict[str, list[dict]] = {}
+        if app_cfg.market.enabled:
+            g = step // 1000
+            for sym in sorted(held):
+                rows, e = [], (end // step + 1) * g   # aligned, so repeat calls hit the cache
+                try:
+                    while e * 1000 > start:
+                        page = mkt.candles(sym, tf, e)
+                        if not page:
+                            break
+                        rows += page
+                        e -= g * 300
+                except (KeyError, MarketError):
+                    pass   # that coin falls back to its hourly price
+                candles[sym] = rows
+        return {"step_ms": step, "points": detail_curve(curve, candles, start, end, step, tf_ms)}
 
     # -- live market (public Coinbase data; jevtrade.data.market)
 
