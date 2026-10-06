@@ -104,7 +104,7 @@ function JevPanel({ symbol, coin, paper, rows }: { symbol: string; coin?: LiveCo
         <div className="tile">
           <div className="tile-label">Unrealized P&amp;L (live)</div>
           <div className={`tile-value ${tone(live) ?? ""}`}>{live === null ? "–" : fmtMoney(live)}</div>
-          <div className="tile-sub">{pos && price !== null ? `${fmtPct(price / pos.entry_price - 1)} · stop ${fmtPrice(pos.stop_price)}` : "before Robinhood's spread"}</div>
+          <div className="tile-sub">{pos && price !== null ? `${fmtPct(price / pos.entry_price - 1)} · stop ${fmtPrice(pos.stop_price)}` : "before trading costs"}</div>
         </div>
         <div className="tile">
           <div className="tile-label">Last call</div>

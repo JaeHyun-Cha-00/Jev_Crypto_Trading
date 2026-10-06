@@ -28,7 +28,8 @@ because TypeSafe recommends named fields when state has several parts.
 | `decision.adverse_move_pct` | `8.0` (matches `policy.stop_loss_pct`) | `adverse_move` |
 | `data.timeframe` | `1h` | horizon wording |
 
-The band is wider than a Robinhood round trip (~2% in spread), so an `up`
+The band is wider than a round trip's costs (~1.2-1.8% on Coinbase Advanced),
+so an `up`
 answer is a move that still pays after costs. Until 2026-10-05 the questions
 asked about 4 hours and a 1% band (adverse move 3%); a 4-hour move past 1%
 averaged only about 2.5% on these coins, barely more than the costs.

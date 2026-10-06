@@ -170,9 +170,8 @@ def test_a_late_fill_only_sees_part_of_the_hours_dip():
     assert _fill_bar(bar, 0, 0, H) == bar
 
 
-def test_robinhood_spread_is_paid_on_both_sides_and_wider_for_thin_coins():
-    cfg = AppConfig()   # defaults: no fee, 95bps per side, up to +20bps for thin coins
-    assert cfg.jev_paper.fee_bps == 0
+def test_coinbase_costs_are_paid_on_both_sides_and_wider_for_thin_coins():
+    cfg = AppConfig()   # defaults: 60bps taker fee, 2bps spread per side, up to +30bps for thin coins
     deep, thin = 1_000_000.0, 10.0          # x $100 close: $100M vs $1k an hour
     rows = []
     for sym, vol in (("BTC/USD", deep), ("PNUT/USD", thin)):
@@ -180,37 +179,32 @@ def test_robinhood_spread_is_paid_on_both_sides_and_wider_for_thin_coins():
         rows += [_ohlc(row(sym, i, 100.0), 100.0, 100.0, 100.0, vol) for i in range(1, 6)]
     r = run(rows, cfg)
     by = {t["symbol"]: t for t in r["trades"]}
-    assert by["BTC/USD"]["entry_price"] == pytest.approx(100.95)
-    assert by["BTC/USD"]["exit_price"] == pytest.approx(99.05)
-    assert by["PNUT/USD"]["entry_price"] == pytest.approx(101.15)
-    assert by["BTC/USD"]["fees"] == 0 and by["BTC/USD"]["pnl"] < 0   # a flat price still loses ~1.9%
-    assert r["spread_bps"] == {"min": 95, "max": 115}
+    btc = by["BTC/USD"]
+    assert btc["entry_price"] == pytest.approx(100.02) and btc["exit_price"] == pytest.approx(99.98)
+    assert by["PNUT/USD"]["entry_price"] == pytest.approx(100.32)
+    assert btc["fees"] == pytest.approx(0.006 * (100.02 + 99.98) * btc["qty"])
+    assert btc["ret"] == pytest.approx(-0.0124, abs=2e-4)   # a flat price still loses ~1.24% round trip
+    assert r["fee_bps"] == 60 and r["spread_bps"] == {"min": 2, "max": 32}
 
 
-def test_logged_robinhood_quotes_replace_the_spread_estimate():
-    cfg = AppConfig()   # estimate would be 95-115bps
+def test_logged_robinhood_quotes_are_ignored():
     rows = [_ohlc(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), 100.0, 100.0, 100.0, 1e6)]
     rows += [_ohlc(row("BTC/USD", i, 100.0), 100.0, 100.0, 100.0, 1e6) for i in range(1, 6)]
-    rows[0].update(rh_bid=99.5, rh_ask=100.5)   # 50bps per side, carried forward to later fills
-    rows[3].update(rh_bid=99.0, rh_ask=101.0)   # 100bps from hour 3 on
-    r = run(rows, cfg)
-    t = r["trades"][0]
-    assert t["entry_price"] == pytest.approx(100.5)
-    assert t["exit_price"] == pytest.approx(99.0)
-    assert r["spread_source"] == "robinhood" and r["quoted_symbols"] == 1
-    assert r["spread_bps"] == {"min": pytest.approx(100), "max": pytest.approx(100)}
+    rows[0].update(rh_bid=99.0, rh_ask=101.0)   # older log lines carry these
+    assert run(rows, AppConfig())["trades"][0]["entry_price"] == pytest.approx(100.02)
 
 
-def test_without_quotes_the_estimate_is_reported():
-    r = run([row("BTC/USD", 0, 100.0)], AppConfig())
-    assert r["spread_source"] == "estimate" and r["quoted_symbols"] == 0
+def test_default_config_trades_with_coinbase_costs_and_no_gate():
+    from jevtrade.config import load_config
+    p = load_config().jev_paper
+    assert p.fee_bps == 60 and p.gate_lookback_hours is None
 
 
 def test_spread_scales_on_log_volume():
-    c = JevPaperConfig()
-    assert c.spread_for(5e6) == c.spread_for(5e9) == 95
-    assert c.spread_for(5e5) == pytest.approx(105) and c.spread_for(5e4) == pytest.approx(115)
-    assert c.spread_for(None) == c.spread_for(0) == 115
+    c = JevPaperConfig()   # 2bps, up to +30bps at 100x below $5M an hour
+    assert c.spread_for(5e6) == c.spread_for(5e9) == 2
+    assert c.spread_for(5e5) == pytest.approx(17) and c.spread_for(5e4) == pytest.approx(32)
+    assert c.spread_for(None) == c.spread_for(0) == 32
 
 
 def test_buys_are_capped_at_a_share_of_hourly_dollar_volume():
