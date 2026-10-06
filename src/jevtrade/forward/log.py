@@ -121,6 +121,7 @@ def _rate(k: int, n: int) -> float | None:
 def metrics(rows: list[dict], cost_usd: float = 0.0) -> dict:
     """Counts, hit rate vs. baselines, confusion matrix, calibration and scores for `rows`."""
     counts = Counter(r.get("status") for r in rows)
+    waiting = [r for r in rows if r["predicted"] and r["outcome"] is None]
     scored = [r for r in rows if r["hit"] is not None]
     n = len(scored)
     realized = Counter(r["outcome"]["direction"] for r in scored)
@@ -166,7 +167,8 @@ def metrics(rows: list[dict], cost_usd: float = 0.0) -> dict:
         "abstain": counts.get("abstain", 0),
         "error": counts.get("error", 0),
         "scored": n,
-        "pending": sum(1 for r in rows if r["predicted"] and r["outcome"] is None),
+        "pending": len(waiting),
+        "oldest_pending_ts": min((r["candle_ts"] for r in waiting), default=None),   # the next call to be scored
         "hits": sum(r["hit"] for r in scored),
         "hit_rate": _rate(sum(r["hit"] for r in scored), n),
         "realized": {c: realized[c] for c in DIRECTIONS},

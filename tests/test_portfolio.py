@@ -288,7 +288,7 @@ def test_hours_show_each_hours_picks_what_the_account_did_and_how_they_did():
     # Resolved at hour 4 (horizon 4): BTC rose 4%, SOL and ETH were flat.
     assert btc["ret"] == pytest.approx(0.04) and btc["net"] == pytest.approx(0.04 - 2 * 12 / 10_000)
     assert sol["ret"] == 0.0 and h["market"] == pytest.approx(0.04 / 3)
-    assert h["resolves_at"] == T0 + 4 * H
+    assert h["resolves_at"] == T0 + 5 * H   # the hour-4 candle closes at hour 5
     later = r["hours"][0]   # hour 5: no picks, horizon still open
     assert later["picks"] == [] and later["market"] is None and later["bought"] == []
 
@@ -306,3 +306,32 @@ def test_an_hour_the_collector_skipped_still_gets_a_row():
     r = run(rows)
     assert [(h["bar_ts"], h["asked"]) for h in r["hours"]] == [(T0 + 3 * H, 1), (T0 + 2 * H, 0), (T0 + H, 1), (T0, 1)]
     assert r["hours"][1]["picks"] == [] and r["hours"][1]["market"] is None
+
+
+def test_curve_points_carry_the_cash_and_coins_held():
+    rows = [row("BTC/USD", 0, 100.0, up=0.6, down=0.1)] + [row("BTC/USD", i, 100.0) for i in range(1, 3)]
+    curve = run(rows)["curve"]
+    assert curve[0]["holdings"] == {}
+    assert set(curve[1]["holdings"]) == {"BTC/USD"} and curve[1]["holdings"]["BTC/USD"] > 0
+
+
+def test_detail_curve_values_each_hours_coins_at_finer_closes():
+    from jevtrade.forward.portfolio import detail_curve
+    m5 = 300_000
+    curve = [{"bar_ts": T0, "equity": 1000.0, "cash": 1000.0, "holdings": {}},
+             {"bar_ts": T0 + H, "equity": 1000.0, "cash": 500.0, "holdings": {"BTC/USD": 5.0}}]
+    # 5-minute BTC candles across the second hour's close and after: 100 then 101, 102, ...
+    candles = {"BTC/USD": [{"ts": T0 + 2 * H - m5 + k * m5, "close": 100.0 + k} for k in range(4)]}
+    pts = detail_curve(curve, candles, T0 + H, T0 + 2 * H + 3 * m5, m5, H)
+    by = {p["ts"]: p["equity"] for p in pts}
+    assert by[T0 + H + m5] == 1000.0                       # first hour: all cash
+    assert by[T0 + 2 * H] == 500.0 + 5 * 100.0              # second close: its coins at the candle close
+    assert by[T0 + 2 * H + 3 * m5] == 500.0 + 5 * 103.0     # and every 5 minutes after
+    assert [p["ts"] for p in pts] == sorted(p["ts"] for p in pts)
+
+
+def test_detail_curve_falls_back_to_hourly_equity_without_candles():
+    from jevtrade.forward.portfolio import detail_curve
+    curve = [{"bar_ts": T0, "equity": 1010.0, "cash": 500.0, "holdings": {"ETH/USD": 1.0}}]
+    pts = detail_curve(curve, {}, T0, T0 + 2 * H, 900_000, H)
+    assert pts == [{"ts": T0 + H, "equity": 1010.0}]

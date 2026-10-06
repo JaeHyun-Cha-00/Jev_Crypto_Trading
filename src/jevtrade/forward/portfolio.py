@@ -240,7 +240,7 @@ class SkillGate:
 
 
 def _hour(ts: int, asked: list[dict | None], acted: list[dict], picks: list[Signal],
-          market: float | None, horizon_ms: int) -> dict:
+          market: float | None, horizon_ms: int, tf_ms: int) -> dict:
     """One hour for the dashboard: the coins Jev picked (with their return over the horizon once it
     has closed), what the account did, and the average coin's return over the same hours."""
     by_sym = {a["symbol"]: a for a in acted}
@@ -259,7 +259,8 @@ def _hour(ts: int, asked: list[dict | None], acted: list[dict], picks: list[Sign
         "sold": [{"symbol": a["symbol"], "why": a["reason"].split(":")[0]} for a in acted if a["action"] == "exit"],
         "held_back": sum(1 for a in acted if a["reason"].startswith("skill_gate")),
         "market": market,
-        "resolves_at": ts + horizon_ms,
+        # Known once the candle `horizon_ms` later has closed: an hour after it opens.
+        "resolves_at": ts + horizon_ms + tf_ms,
     }
 
 
@@ -359,10 +360,11 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
                             "p_up": action.details.get("p_up"), "p_down": action.details.get("p_down"),
                             "action": action.kind, "reason": action.reason, "size_frac": action.size_frac})
         hours.append(_hour(ts, [row for row, _ in hour.values()], actions[first:], picks.get(ts, []),
-                           market.get(ts), horizon_ms))
+                           market.get(ts), horizon_ms, tf_ms))
         eq = st.equity()
         peak = max(peak, eq)
-        curve.append({"bar_ts": ts, "equity": eq, "cash": st.cash})
+        curve.append({"bar_ts": ts, "equity": eq, "cash": st.cash,
+                      "holdings": {s: o.pos.qty for s, o in st.open.items()}})
 
     eq = st.equity()
     per_symbol = {}
@@ -375,7 +377,7 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
                             avg_excess=gate.avg_excess, reason=gate.reason)
     # An hour the collector skipped still gets a row, so a gap shows rather than hides.
     logged = set(timeline)
-    hours += [_hour(t, [], [], [], None, horizon_ms) for t in range(timeline[0], timeline[-1], tf_ms)
+    hours += [_hour(t, [], [], [], None, horizon_ms, tf_ms) for t in range(timeline[0], timeline[-1], tf_ms)
               if t not in logged]
     return {
         **base,
@@ -398,3 +400,41 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
         "counts": dict(counts),
         "per_symbol": per_symbol,
     }
+
+
+def detail_curve(curve: list[dict], candles: dict[str, list[dict]], start_ms: int, end_ms: int,
+                 step_ms: int, tf_ms: int) -> list[dict]:
+    """The account every `step_ms` in [start_ms, end_ms], at finer prices than the hourly replay.
+
+    `curve` is the replay's hourly curve: each point holds the cash and coins
+    (`holdings`) at the close of its candle, `tf_ms` after `bar_ts`. Between two
+    closes the account keeps the earlier one's cash and coins, valued at each
+    coin's `candles` close (Coinbase candles at `step_ms`, `ts` = candle open,
+    so a candle's close is at `ts + step_ms`). A coin with no candle yet keeps
+    its last known price, or its entry into the account at the hourly equity.
+    Fills inside an hour therefore show at that hour's close.
+    """
+    if not curve:
+        return []
+    closes = [p["bar_ts"] + tf_ms for p in curve]
+    prices = {s: {c["ts"] + step_ms: c["close"] for c in cs} for s, cs in candles.items()}
+    last_px: dict[str, float] = {}
+    out = []
+    t = start_ms - start_ms % step_ms + step_ms
+    i = -1
+    while t <= end_ms:
+        while i + 1 < len(closes) and closes[i + 1] <= t:
+            i += 1
+        for s, by_t in prices.items():
+            if t in by_t:
+                last_px[s] = by_t[t]
+        if i >= 0:
+            p = curve[i]
+            held = p.get("holdings") or {}
+            if all(s in last_px for s in held):
+                out.append({"ts": t, "equity": p["cash"] + sum(q * last_px[s] for s, q in held.items())})
+            elif t == closes[i]:
+                out.append({"ts": t, "equity": p["equity"]})
+        t += step_ms
+    return out
+
