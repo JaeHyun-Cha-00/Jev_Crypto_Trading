@@ -43,6 +43,11 @@ class MarketState:
         return hashlib.sha256(self.text.encode()).hexdigest()
 
 
+def state_window(state_cfg: StateConfig, feature_cfg: FeatureConfig) -> int:
+    """Trailing rows build_state needs to give the same text as full history."""
+    return state_cfg.percentile_window + state_cfg.history_bars + feature_cfg.volume_z_window + 1
+
+
 def estimate_tokens(text: str) -> int:
     return -(-len(text) // CHARS_PER_TOKEN)
 

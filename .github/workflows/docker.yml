@@ -6,21 +6,19 @@ on:
   push:
     branches: [main]
     paths:
-      - "**/Dockerfile*"
-      - "docker-compose.yml"
+      - "Dockerfile"
+      - ".dockerignore"
       - "render.yaml"
       - "pyproject.toml"
       - "web/package*.json"
-      - "web/nginx.conf"
       - ".github/workflows/docker.yml"
   pull_request:
     paths:
-      - "**/Dockerfile*"
-      - "docker-compose.yml"
+      - "Dockerfile"
+      - ".dockerignore"
       - "render.yaml"
       - "pyproject.toml"
       - "web/package*.json"
-      - "web/nginx.conf"
       - ".github/workflows/docker.yml"
 
 permissions:
@@ -35,9 +33,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate compose file
-        run: docker compose config --quiet
-      - name: Build images
-        run: docker compose build
-      - name: Build the hosted image (render.yaml)
-        run: docker build -f Dockerfile.hosted -t jevtrade-hosted .
+      - name: Build the image Render runs (render.yaml)
+        run: docker build -t jevtrade .

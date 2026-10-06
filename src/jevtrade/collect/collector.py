@@ -42,12 +42,11 @@ from typing import Callable
 
 import pandas as pd
 
-from ..backtest.engine import state_window
 from ..data.fetcher import OHLCVSource, fetch_range, has_deep_history, page_limit_for
 from ..data.timeframes import last_closed_open_ms, ms_to_iso, timeframe_ms
 from ..decision.base import Decision, DecisionModel, QuestionSpec
 from ..features.compute import compute_features
-from ..state.builder import build_state
+from ..state.builder import build_state, state_window
 
 log = logging.getLogger(__name__)
 

@@ -1,4 +1,4 @@
-"""DecisionModel interface shared by Jev, Mock and Baseline models.
+"""DecisionModel interface and the questions Jev is asked.
 
 Models answer a fixed set of questions about a MarketState with a
 probability distribution over each question's options. Models never see
@@ -134,14 +134,10 @@ class JevConfig(BaseModel):
 
 
 class DecisionConfig(BaseModel):
-    model: str = "mock"  # mock | baseline | jev
     horizon_bars: int = 4       # 4 bars = 4 hours on 1h candles
     flat_band_pct: float = 1.0  # "up" > +1%, "down" < -1%, otherwise "flat"
     adverse_move_pct: float = 3.0
     questions: list[QuestionSpec] | None = None
-    mock_abstain_rate: float = Field(0.1, ge=0, le=1)
-    baseline_fast: int = 20
-    baseline_slow: int = 50
     jev: JevConfig = Field(default_factory=JevConfig)
 
     def resolved_questions(self, timeframe: str = "1h") -> list[QuestionSpec]:
