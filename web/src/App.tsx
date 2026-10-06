@@ -425,9 +425,7 @@ function JevView({ data }: { data: Data }) {
         <EquityChart points={equity} initial={paper?.initial_equity ?? 10_000} />
         <p className="caveat small" role="note">
           <span aria-hidden="true">▲</span> Likely better than real trading. Prices are Coinbase hourly candles with
-          {paper?.spread_source === "robinhood"
-            ? " the spread Robinhood quoted each hour (an estimate for coins with no quote logged yet), not Robinhood's own prices."
-            : " an estimated Robinhood spread, not real Robinhood quotes."} Hours logged before candle highs and lows were
+          Coinbase Advanced's taker fee and an estimated order-book spread, not real fills. Hours logged before candle highs and lows were
           recorded only check the{pol ? ` ${fmtPct(pol.stop_loss_pct, false)}` : ""} stop-loss on closes.
         </p>
         {gate && !gate.open && (
@@ -512,9 +510,7 @@ function JevView({ data }: { data: Data }) {
                 {paper.fee_bps ? `${paper.fee_bps} bps fee + ` : "No fee, "}
                 {fmtPct(paper.spread_bps.min / 10_000, false)}–{fmtPct(paper.spread_bps.max / 10_000, false)} spread per side
                 {paper.slippage_bps ? ` + ${paper.slippage_bps} bps slippage` : ""}
-                {paper.spread_source === "robinhood"
-                  ? ` (Robinhood's latest quotes for ${paper.quoted_symbols} coins)`
-                  : " (Robinhood-like estimate; wider for thin coins)"}
+                {" "}(Coinbase Advanced; spread wider for thin coins)
               </dd>
             </dl>
           )}

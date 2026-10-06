@@ -40,11 +40,6 @@ class DataConfig(BaseModel):
     # pages back through full hourly history; kraken serves only ~30 days.
     exchange: str = "coinbaseexchange"
     symbols: list[str] = Field(default_factory=lambda: ["BTC/USD", "ETH/USD"])
-    # Track every Robinhood-tradable, non-stablecoin coin with an online Coinbase
-    # USD market instead, read at the start of each run (jevtrade.data.live);
-    # `symbols` is then the fallback and sets the order of the coins it names.
-    symbols_live: bool = False
-    exclude: list[str] = Field(default_factory=list)   # never tracked, even when listed live
     timeframe: str = "1h"
     # Max candles per request; clamped to the exchange cap (coinbase 300, kraken 720).
     page_limit: int = 300

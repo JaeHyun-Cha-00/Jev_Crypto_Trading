@@ -20,7 +20,7 @@ Python package `src/jevtrade/`, in the order data flows through it:
 
 | Module | Purpose |
 |---|---|
-| `data/` | Public OHLCV via ccxt (`fetcher.py`); the live coin list and Robinhood quotes (`live.py`); the dashboard's live Coinbase market data (`market.py`) |
+| `data/` | Public OHLCV via ccxt (`fetcher.py`) and the dashboard's live Coinbase market data (`market.py`) |
 | `features/` | Closed-candle features, no look-ahead |
 | `state/` | Anonymized JSON market state for the model |
 | `decision/` | The questions and the Jev model (via OpenRouter); `python -m jevtrade.decision` asks Jev once from the terminal |
@@ -84,9 +84,7 @@ ignores), never from YAML.
 ```yaml
 data:
   exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken
-  symbols: [BTC/USD, ETH/USD, ...]  # 81 coins: Robinhood-tradable with a Coinbase USD market
-  symbols_live: true         # re-read that list from Robinhood and Coinbase each run; symbols is the fallback
-  exclude: [PAXG/USD]        # never tracked, even when listed
+  symbols: [BTC/USD, ETH/USD, ...]  # the 82 coins Jev is asked about hourly; all on Coinbase
   timeframe: 1h
   page_limit: 300            # candles per request, clamped per exchange
   requests_trust_env: true   # honour HTTPS_PROXY / REQUESTS_CA_BUNDLE
