@@ -60,14 +60,14 @@ policy:                      # all risk limits live here, enforced in code
   exit_min_edge: 0.30        # ...when p(down) - p(up) is also at least this
   # Sizing is risk-based: notional = equity x risk_per_trade / stop distance,
   # capped at max_position_frac. With an 8% stop that is 12.5% of equity per
-  # position, so up to 4 coins fit under max_gross_exposure.
+  # position, so up to 8 coins fit under max_gross_exposure (all of equity).
   risk_per_trade: 0.01       # equity at risk if the stop is hit
   # 8%: with no time exit a position is held for days, and over the last 180
   # days these coins dipped 3% within 3 days 62% of the time (8%: 21%).
   stop_loss_pct: 0.08
   stop_slippage_bps: 5       # stops trigger on the bar low; fill at stop (or gap open) less this
   max_position_frac: 0.50    # per-symbol notional / equity
-  max_gross_exposure: 0.50
+  max_gross_exposure: 1.00   # all positions / equity; 1.0 = fully invested, no cash held back
   min_trade_frac: 0.01
   max_daily_loss_pct: 0.03   # blocks new entries for the rest of the UTC day
   cooldown_after_losses: 3

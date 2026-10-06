@@ -102,6 +102,11 @@ def test_forward_paper_replays_logged_answers(env):
     assert len(c.get("/api/forward/paper", params={"actions": 1}).json()["actions"]) == 1
     assert len(c.get("/api/forward/paper", params={"hours": 1}).json()["hours"]) == 1
     assert c.post("/api/forward/paper").status_code == 405
+    # Coinbase is unreachable in tests, so the detail falls back to the hourly equity at each close.
+    d = c.get("/api/forward/paper/detail").json()
+    assert d["step_ms"] in (300_000, 900_000, 3_600_000)
+    assert all(set(p) == {"ts", "equity"} for p in d["points"])
+    assert c.get("/api/forward/paper/detail", params={"hours": 0}).status_code == 422
 
 
 def test_forward_starts_at_start(env):

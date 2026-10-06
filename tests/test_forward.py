@@ -59,6 +59,7 @@ def test_metrics(rows):
     m = metrics(rows, cost_usd=1.5)
     assert (m["decisions"], m["answered"], m["abstain"], m["error"]) == (7, 5, 1, 1)
     assert (m["scored"], m["pending"], m["hits"]) == (4, 1, 2)
+    assert m["oldest_pending_ts"] == rows[0]["candle_ts"]
     assert m["hit_rate"] == 0.5
     assert m["realized"] == {"up": 1, "flat": 2, "down": 1}
     assert m["baselines"]["majority"] == {"label": "flat", "hit_rate": 0.5}
@@ -79,6 +80,7 @@ def test_metrics(rows):
 
 def test_metrics_empty():
     m = metrics([])
+    assert m["oldest_pending_ts"] is None
     assert m["scored"] == 0 and m["hit_rate"] is None
     assert m["baselines"]["majority"]["hit_rate"] is None
     assert m["direction_scores"]["brier"] is None and m["adverse_move_scores"]["brier"] is None

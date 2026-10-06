@@ -86,19 +86,23 @@ function Calibration({ m }: { m: ForwardMetrics }) {
   );
 }
 
-function Result({ r }: { r: ForwardRow }) {
+const HOUR_MS = 3_600_000;
+
+function Result({ r, horizon }: { r: ForwardRow; horizon: number }) {
   if (r.status !== "answered") return <span className="tag">{r.status}</span>;
-  if (r.hit === null) return <span className="tag">pending</span>;
+  if (r.hit === null) return <span className="muted">result {fmtTime(r.candle_ts + (horizon + 1) * HOUR_MS).slice(5)}</span>;
   return r.hit ? <span className="tag hit">✓ hit</span> : <span className="tag miss">✗ miss</span>;
 }
 
 const dirLabel = (d: Direction | null | undefined) => d ?? "–";
 
-export function ForwardLog({ summary, rows, symbol, error }: {
+export function ForwardLog({ summary, rows, symbol, error, horizon }: {
   summary: ForwardSummary | null;
   rows: ForwardRow[];
   symbol: string;
   error: string | null;
+  /** hours each call looks ahead (decision.horizon_bars) */
+  horizon: number;
 }) {
   const m = summary ? (symbol ? summary.per_symbol[symbol] : summary.overall) : null;
   const shown = rows.filter((r) => !symbol || r.symbol === symbol).slice(0, 100);
@@ -106,10 +110,12 @@ export function ForwardLog({ summary, rows, symbol, error }: {
   const beats = m?.hit_rate != null && m.hit_rate > best;
   const ds = m?.direction_scores;
   const as = m?.adverse_move_scores;
+  // A call is scored once the candle `horizon` hours after it has closed, i.e. horizon + 1 hours after its own candle opened.
+  const firstScoredAt = m?.oldest_pending_ts != null ? m.oldest_pending_ts + (horizon + 1) * HOUR_MS : null;
 
   return (
     <section className="card">
-      <h2>Jev forward log</h2>
+      <h2>Jev's accuracy</h2>
       <p className="muted small">
         {summary?.source === "off"
           ? "Turned off (forward_log.source: off)."
@@ -154,14 +160,20 @@ export function ForwardLog({ summary, rows, symbol, error }: {
             </div>
           </div>
 
-          {m.scored > 0 && (
+          {m.scored === 0 ? (
+            <p className="notice" role="status">
+              No calls scored yet. Each call is checked {horizon} hours after Jev made it
+              {firstScoredAt != null && <>, so the first results arrive around <strong>{fmtTime(firstScoredAt)} {TZ}</strong></>}.
+              {" "}{m.pending.toLocaleString()} calls are waiting.
+            </p>
+          ) : (
             <>
               <h3>Hit rate vs. baselines</h3>
               <Bars m={m} />
             </>
           )}
 
-          <div className="two inner">
+          {m.scored > 0 && <div className="two inner">
             <div>
               <h3>Confusion matrix</h3>
               <div className="scroll"><Confusion m={m} /></div>
@@ -174,21 +186,21 @@ export function ForwardLog({ summary, rows, symbol, error }: {
                 its base rate of {pct0(as?.base_rate)} ({as?.n ?? 0} calls).
               </p>
             </div>
-          </div>
+          </div>}
 
           <h3>Recent calls</h3>
           <div className="scroll">
             <table>
               <thead>
                 <tr>
-                  <th>Candle ({TZ})</th><th>Symbol</th><th title="Jev's call and its own confidence">Call (conf.)</th><th>Regime</th><th className="num">P(adverse)</th>
+                  <th title="When Jev was asked: just after this hour's candle closed">Decided ({TZ})</th><th>Symbol</th><th title="Jev's call and its own confidence">Call (conf.)</th><th>Regime</th><th className="num">P(adverse)</th>
                   <th>Realized</th><th className="num">Return</th><th>Result</th>
                 </tr>
               </thead>
               <tbody>
                 {shown.map((r) => (
                   <tr key={`${r.symbol}-${r.candle_ts}`}>
-                    <td>{fmtTime(r.candle_ts)}</td>
+                    <td>{fmtTime(r.candle_ts + HOUR_MS)}</td>
                     <td>{r.symbol}</td>
                     <td>{r.predicted ? `${r.predicted} ${pct0(r.confidence)}` : "–"}</td>
                     <td>{r.regime ?? "–"}</td>
@@ -197,7 +209,7 @@ export function ForwardLog({ summary, rows, symbol, error }: {
                     <td className={`num ${r.outcome ? (r.outcome.ret_pct > 0 ? "up" : r.outcome.ret_pct < 0 ? "down" : "") : ""}`}>
                       {r.outcome ? fmtPct(r.outcome.ret_pct / 100) : "–"}
                     </td>
-                    <td title={r.abstain_reason ?? undefined}><Result r={r} /></td>
+                    <td title={r.abstain_reason ?? undefined}><Result r={r} horizon={horizon} /></td>
                   </tr>
                 ))}
               </tbody>

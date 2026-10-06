@@ -53,6 +53,8 @@ export interface ForwardMetrics {
   error: number;
   scored: number;
   pending: number;
+  /** candle of the oldest call still waiting for its outcome (UTC ms); null when none */
+  oldest_pending_ts: number | null;
   hits: number;
   hit_rate: number | null;
   realized: Record<Direction, number>;
@@ -194,6 +196,14 @@ export const getForwardSummary = () => get<ForwardSummary>("/forward/summary");
 export const getForwardRows = (params: { symbol?: string; limit?: number } = {}) =>
   get<ForwardRow[]>("/forward/rows", params);
 export const getJevPaper = (actions = 300, hours = 168) => get<JevPaper>("/forward/paper", { actions, hours });
+
+/** The simulated account at finer steps: each hour's cash and coins valued at Coinbase candle closes. */
+export interface JevPaperDetail {
+  step_ms: number | null;
+  points: { ts: number; equity: number }[];
+}
+export const getJevPaperDetail = (hours?: number) =>
+  get<JevPaperDetail>("/forward/paper/detail", { hours: hours !== undefined && Number.isFinite(hours) ? hours : undefined });
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
