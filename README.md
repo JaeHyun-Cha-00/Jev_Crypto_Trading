@@ -34,7 +34,7 @@ Python package `src/jevtrade/`, in the order data flows through it:
 
 Elsewhere: `web/` is the React dashboard (`src/pages/`, `src/components/`,
 `src/lib/` for the API client and formatting), `tests/` mirrors the modules,
-`config/` holds the YAML, `docs/` the longer guides, and `Dockerfile.hosted`
+`config/` holds the YAML, `docs/` the longer guides, and `Dockerfile`
 with `render.yaml` at the root deploy it.
 
 ## How it runs
@@ -42,9 +42,23 @@ with `render.yaml` at the root deploy it.
 - **GitHub Actions** (`.github/workflows/collect.yml`) asks Jev about every
   tracked coin each hour and commits the answers to the `data-log` branch.
 - **Render** (`render.yaml`) hosts the dashboard and restarts a skipped hourly
-  run: see [docs/deploy.md](docs/deploy.md).
+  run: see [Live website](#live-website).
 
 Nothing needs to run on your own computer.
+
+## Live website
+
+`render.yaml` deploys the dashboard as one free Render web service. To set it up:
+
+1. Sign in at https://dashboard.render.com with GitHub and let Render see this repo.
+2. New → Blueprint → pick this repo.
+3. Fill in `DASHBOARD_PASSWORD` (the browser asks for it; any user name works)
+   and `GITHUB_TOKEN` (Contents: read, Actions: read and write), then Apply.
+
+Every merge to `main` that touches the app redeploys. The same service starts
+the hourly collect run when GitHub skips it (from :03 past the hour) and pings
+itself every 10 minutes, because free services otherwise sleep after 15 idle
+minutes.
 
 ## Setup
 
@@ -83,7 +97,6 @@ data:
 | File | What it covers |
 |---|---|
 | [docs/forward-log.md](docs/forward-log.md) | The hourly forward log of Jev's answers: the collect workflow, collect-kick, the `data-log` branch |
-| [docs/deploy.md](docs/deploy.md) | The live website on Render |
 | [docs/jev_prompt.md](docs/jev_prompt.md) | The question Jev is asked and how its answer is read |
 
 ## Evaluation validity

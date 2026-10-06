@@ -6,7 +6,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "Dockerfile.hosted"
+      - "Dockerfile"
       - ".dockerignore"
       - "render.yaml"
       - "pyproject.toml"
@@ -14,7 +14,7 @@ on:
       - ".github/workflows/docker.yml"
   pull_request:
     paths:
-      - "Dockerfile.hosted"
+      - "Dockerfile"
       - ".dockerignore"
       - "render.yaml"
       - "pyproject.toml"
@@ -33,5 +33,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build the hosted image (render.yaml)
-        run: docker build -f Dockerfile.hosted -t jevtrade-hosted .
+      - name: Build the image Render runs (render.yaml)
+        run: docker build -t jevtrade .
