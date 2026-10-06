@@ -4,13 +4,13 @@ services:
   - type: web
     name: jev-dashboard
     runtime: docker
-    dockerfilePath: ./Dockerfile.hosted
+    dockerfilePath: ./Dockerfile
     plan: free
     region: oregon
     branch: main
     autoDeploy: true            # redeploys on every merge to main
     buildFilter:                # skip builds for docs/tests-only merges (500 free build minutes a month)
-      paths: [src/**, web/**, config/**, pyproject.toml, Dockerfile.hosted]
+      paths: [src/**, web/**, config/**, pyproject.toml, Dockerfile]
     healthCheckPath: /api/health
     envVars:
       - key: DASHBOARD_PASSWORD  # the browser asks for it; any user name works
