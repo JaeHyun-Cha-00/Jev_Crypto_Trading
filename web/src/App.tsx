@@ -169,15 +169,14 @@ const fmtQty = (q: number) =>
   q >= 1000 ? q.toLocaleString(undefined, { maximumFractionDigits: 0 }) : q.toLocaleString(undefined, { maximumSignificantDigits: 4 });
 
 /** Every coin Jev bought, split into what it holds now (or is about to buy) and what it sold. */
-function Bought({ paper, symbol, market }: { paper: JevPaper | null; symbol: string; market: LiveMarket }) {
-  const mine = <T extends { symbol: string }>(xs: T[]) => xs.filter((x) => !symbol || x.symbol === symbol);
-  const pending = mine(paper?.pending ?? []).filter((p) => p.kind === "enter");
+function Bought({ paper, market }: { paper: JevPaper | null; market: LiveMarket }) {
+  const pending = (paper?.pending ?? []).filter((p) => p.kind === "enter");
   // Held coins at their live Coinbase price, falling back to the last hourly close.
-  const held = mine(paper?.positions ?? []).map((p) => {
+  const held = (paper?.positions ?? []).map((p) => {
     const mark = market.bySymbol[p.symbol]?.price ?? p.mark;
     return { ...p, mark, unrealized_pnl: p.qty * (mark - p.entry_price) };
   });
-  const sold = mine(paper?.trades ?? []);
+  const sold = paper?.trades ?? [];
   const base = (s: string) => s.split("/")[0];
   const unrealized = held.reduce((sum, p) => sum + p.unrealized_pnl, 0);
   const realized = sold.reduce((sum, t) => sum + t.pnl, 0);
@@ -187,12 +186,12 @@ function Bought({ paper, symbol, market }: { paper: JevPaper | null; symbol: str
       <div className="card-head">
         <h2>What Jev bought</h2>
         <span className="muted small">
-          {paper?.tracking_since != null && `Since ${fmtTime(paper.tracking_since)} ${TZ}`}
+          {paper?.tracking_since != null && `Since ${fmtTime(paper.tracking_since + HOUR_MS)} ${TZ}`}
         </span>
       </div>
       {count === 0 ? (
         <p className="muted">
-          Jev hasn't bought anything{symbol ? ` on ${symbol}` : ""} yet. It buys when p(up) is at least{" "}
+          Jev hasn't bought anything yet. It buys when p(up) is at least{" "}
           {paper?.policy.entry_threshold ?? 0.55} and beats p(down) by {paper?.policy.min_edge ?? 0.1}
           {paper?.gate ? ", while the skill gate is open" : ""}.
         </p>
@@ -446,16 +445,28 @@ function liveEquity(paper: JevPaper | null, market: LiveMarket): number | null {
   return paper.cash + paper.positions.reduce((sum, p) => sum + p.qty * (market.bySymbol[p.symbol]?.price ?? p.mark), 0);
 }
 
-/** Live equity sampled every few seconds, kept in this browser for a few hours so a reload keeps the line. */
-function useLiveTail(value: number | null): CurvePoint[] {
-  const [tail, setTail] = useState<CurvePoint[]>(() => {
+/** Live equity sampled every few seconds, kept in this browser for a few hours so a reload keeps the line.
+ *  Stored per tracking start, so a fresh start never shows the old account's line. */
+function useLiveTail(value: number | null, since: number | null | undefined): CurvePoint[] {
+  const key = `${LIVE_KEY}:${since ?? "none"}`;
+  const read = (): CurvePoint[] => {
     try {
-      const saved = JSON.parse(localStorage.getItem(LIVE_KEY) ?? "[]");
+      const saved = JSON.parse(localStorage.getItem(key) ?? "[]");
       return Array.isArray(saved) ? saved.filter((p) => typeof p?.bar_ts === "number" && typeof p?.equity === "number") : [];
     } catch {
       return [];
     }
-  });
+  };
+  const [tail, setTail] = useState<CurvePoint[]>(read);
+  useEffect(() => {
+    setTail(read());
+    try {
+      localStorage.removeItem(LIVE_KEY);   // the unkeyed store of earlier versions
+    } catch {
+      /* storage blocked */
+    }
+    // read depends only on key
+  }, [key]);
   const latest = useRef(value);
   latest.current = value;
   useEffect(() => {
@@ -466,7 +477,7 @@ function useLiveTail(value: number | null): CurvePoint[] {
         const now = Date.now();
         const next = [...t.filter((p) => p.bar_ts > now - LIVE_KEEP_MS), { bar_ts: now, equity: v }];
         try {
-          localStorage.setItem(LIVE_KEY, JSON.stringify(next));
+          localStorage.setItem(key, JSON.stringify(next));
         } catch {
           /* storage blocked: the line just starts over on reload */
         }
@@ -474,7 +485,7 @@ function useLiveTail(value: number | null): CurvePoint[] {
       });
     }, LIVE_EVERY_MS);
     return () => clearInterval(id);
-  }, []);
+  }, [key]);
   return tail;
 }
 
@@ -498,22 +509,23 @@ function useDetail(hours: number, lastBar: number | null | undefined): CurvePoin
 }
 
 /** What Jev holds and sold, and the account's balance over time. */
-function JevPortfolio({ data, symbol, market }: { data: Data; symbol: string; market: LiveMarket }) {
+function JevPortfolio({ data, market }: { data: Data; market: LiveMarket }) {
   const [range, setRange] = useState<RangeId>("all");
   const { config, paper } = data;
   const hours = RANGES.find((r) => r.id === range)!.hours;
   const live = liveEquity(paper, market);
-  const tail = useLiveTail(live);
+  const tail = useLiveTail(live, paper?.tracking_since);
   const detail = useDetail(hours, paper?.last_bar_ts);
   // Each hourly point is the account at that hour's close, an hour after the candle opened.
   const hourly = (paper?.curve ?? []).map((p) => ({ ...p, bar_ts: p.bar_ts + HOUR_MS }));
   const history = detail?.length ? detail : hourly;
   const lastKnown = history.length ? history[history.length - 1].bar_ts : -Infinity;
-  const start = paper?.tracking_since != null && hourly.length ? [{ bar_ts: paper.tracking_since, equity: paper.initial_equity }] : [];
+  // The first decision comes as the start candle closes, an hour after it opens.
+  const start = paper?.tracking_since != null && hourly.length ? [{ bar_ts: paper.tracking_since + HOUR_MS, equity: paper.initial_equity }] : [];
   const curve = [
     ...start.filter((p) => !history.length || p.bar_ts < history[0].bar_ts),
     ...history,
-    ...tail.filter((p) => p.bar_ts > lastKnown),
+    ...(history.length ? tail.filter((p) => p.bar_ts > lastKnown) : []),
     ...(live != null && hourly.length ? [{ bar_ts: Date.now(), equity: live }] : []),
   ];
   const cutoff = curve.length ? curve[curve.length - 1].bar_ts - hours * HOUR_MS : 0;
@@ -538,7 +550,7 @@ function JevPortfolio({ data, symbol, market }: { data: Data; symbol: string; ma
         <div className="hero-top">
           <div>
             <div className="hero-label">
-              {paper?.tracking_since != null && <>Tracking since {fmtTime(paper.tracking_since)} {TZ}</>}
+              {paper?.tracking_since != null && <>Tracking since {fmtTime(paper.tracking_since + HOUR_MS)} {TZ}</>}
               {streaming && <span className="live-pip" title="Held coins valued at live Coinbase prices"> · <span className="pip" aria-hidden="true" />Live</span>}
             </div>
             <div className="balance">
@@ -589,7 +601,7 @@ function JevPortfolio({ data, symbol, market }: { data: Data; symbol: string; ma
         <Tile label="Realized PnL" value={fmtMoney(realized)} tone={tone(realized)} />
       </section>
 
-      <Bought paper={paper} symbol={symbol} market={market} />
+      <Bought paper={paper} market={market} />
 
     </>
   );
@@ -741,9 +753,10 @@ function JevView({ data, page, symbol, setSymbol, market }: {
   return (
     <>
       <JevNav page={page} />
-      {page !== "rules" && <CoinChips data={data} symbol={symbol} setSymbol={setSymbol} />}
+      {/* The coin filter is for the long lists; the portfolio always shows the whole account. */}
+      {(page === "activity" || page === "accuracy") && <CoinChips data={data} symbol={symbol} setSymbol={setSymbol} />}
       {page === "portfolio" ? (
-        <JevPortfolio data={data} symbol={symbol} market={market} />
+        <JevPortfolio data={data} market={market} />
       ) : page === "activity" ? (
         <JevActivity data={data} symbol={symbol} />
       ) : page === "accuracy" ? (
@@ -806,13 +819,20 @@ export default function App() {
     <>
       <header className="topbar">
         <div className="topbar-inner">
-          <a className="brand" href="#/" aria-label="Jev portfolio">
-            <span className="logo" aria-hidden="true">J</span>
-            <h1>Jev</h1>
-            <span className="badge" title="Simulated fills, never real orders">PAPER</span>
+          <a className="brand" href="#/" aria-label="Jev Crypto Trading: portfolio">
+            <span className="logo" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 16.5l4.5-4.5 3.5 3.5L19.5 8" />
+                <path d="M14.5 8h5v5" />
+              </svg>
+            </span>
+            <h1 className="wordmark">
+              <span className="wordmark-name">Jev</span>
+              <span className="wordmark-rest">Crypto Trading</span>
+            </h1>
           </a>
           <nav className="tabs" aria-label="View">
-            <a href="#/" className={tab === "jev" ? "on" : ""} aria-current={tab === "jev" ? "page" : undefined}>Jev portfolio</a>
+            <a href="#/" className={tab === "jev" ? "on" : ""} aria-current={tab === "jev" ? "page" : undefined}>Portfolio</a>
             <a href="#/market" className={tab === "market" ? "on" : ""} aria-current={tab === "market" ? "page" : undefined}>Market</a>
           </nav>
           <span className="spacer" />

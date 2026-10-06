@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class FeatureConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
+
     return_windows: list[int] = Field(default_factory=lambda: [1, 4, 24, 72])
     vol_windows: list[int] = Field(default_factory=lambda: [24, 72])
     volume_z_window: int = 24
@@ -65,14 +67,3 @@ def compute_features(candles: pd.DataFrame, cfg: FeatureConfig | None = None) ->
 
     return pd.DataFrame(out, index=candles.index)
 
-
-def max_lookback(cfg: FeatureConfig | None = None) -> int:
-    """Candles of history needed before every feature is defined."""
-    cfg = cfg or FeatureConfig()
-    return max(
-        max(cfg.return_windows),
-        max(cfg.vol_windows) + 1,
-        cfg.volume_z_window,
-        cfg.rsi_period + 1,
-        max(cfg.ma_windows),
-    )

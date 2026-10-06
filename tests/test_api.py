@@ -141,3 +141,4 @@ def test_start_reads_naive_and_zoned_times():
     assert ForwardLogConfig().start_ms() is None
     z = ForwardLogConfig(start="2026-10-05T07:00:00Z").start_ms()
     assert z == ForwardLogConfig(start="2026-10-05T07:00:00").start_ms() == 1791183600000
+

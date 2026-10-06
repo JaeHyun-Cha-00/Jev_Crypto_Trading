@@ -19,30 +19,15 @@ def synthetic_candles(n: int, start_ms: int = T0, tf_ms: int = H, seed: int = 0)
     return [[start_ms + i * tf_ms, open_[i], high[i], low[i], close[i], vol[i]] for i in range(n)]
 
 
-class FakeSource:
-    """In-memory OHLCV source mimicking ccxt.fetch_ohlcv semantics."""
-
-    def __init__(self, candles: list[list[float]], missing: set[int] | None = None,
-                 max_history: int | None = None):
-        self.candles = candles
-        self.missing = missing or set()
-        self.max_history = max_history  # e.g. Kraken: only the latest 720 candles exist
-        self.calls = 0
-
-    def fetch_ohlcv(self, symbol, timeframe, since=None, limit=None):
-        self.calls += 1
-        pool = self.candles[-self.max_history:] if self.max_history else self.candles
-        rows = [c for c in pool if (since is None or c[0] >= since) and c[0] not in self.missing]
-        return rows[: limit or 500]
-
-
-class WindowedSource(FakeSource):
+class WindowedSource:
     """Coinbase-style source: each request returns only candles inside the
     window [since, since + (limit - 1) * tf], capped at `cap` candles. Full
     history is reachable, and a window with no trades comes back empty."""
 
     def __init__(self, candles, missing=None, cap: int = 300, tf_ms: int = H):
-        super().__init__(candles, missing)
+        self.candles = candles
+        self.missing = missing or set()
+        self.calls = 0
         self.cap = cap
         self.tf_ms = tf_ms
 

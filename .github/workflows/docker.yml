@@ -1,7 +1,7 @@
 name: docker
 
-# Split from tests.yml so the image builds run only when a file they depend on
-# changes (see the minutes note there).
+# Split from tests.yml so the image build runs only when a file it depends on
+# changes.
 on:
   push:
     branches: [main]

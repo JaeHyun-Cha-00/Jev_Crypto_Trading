@@ -13,13 +13,8 @@ dist/
 .env.*
 !.env.example
 
-# Local data / runtime state
-/data/
-*.sqlite
-*.sqlite3
-*.db
-*.parquet
-/reports/out/
+# A local checkout of the data-log branch (forward_log.source: local)
+/data-log/
 
 # Node
 node_modules/

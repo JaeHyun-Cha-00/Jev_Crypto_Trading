@@ -46,6 +46,34 @@ with `render.yaml` at the root deploy it.
 
 Nothing needs to run on your own computer.
 
+## Dashboard
+
+| Page | What it shows |
+|---|---|
+| **Portfolio** (home, `#/`) | The simulated account at live Coinbase prices, its equity in 5-minute steps, what it holds and what it sold |
+| **Activity** | Jev's picks hour by hour, what the account did, and every call |
+| **Accuracy** | Jev's calls scored against what happened 24 hours later, next to naive baselines |
+| **Rules** | The trading rules and costs below |
+| **Market** | Every tracked coin live from Coinbase, with a page per coin |
+
+Times are when Jev decided: just after each hourly candle closes.
+
+## How the Jev portfolio trades
+
+Simulated with fake money; nothing here places orders.
+
+- **Buy** when Jev gives p(up) ≥ 0.60 and p(up) − p(down) ≥ 0.40 for the next
+  24 hours. Each buy risks 1% of the account at the 8% stop, so it is 12.5% of
+  the account, smaller for thin coins (at most 1% of the coin's hourly dollar
+  volume). The account can be fully invested; strongest signals go first.
+- **Sell** when Jev turns bearish (p(down) ≥ 0.40 and p(down) − p(up) ≥ 0.30)
+  or the price falls 8% below the buy. There is no time limit.
+- **Costs** are Coinbase Advanced's: a 0.60% taker fee per side plus an
+  estimated spread, about 1.2–1.8% a round trip.
+- It starts at $10,000 from `forward_log.start` (the first decision is an hour
+  later, as that candle closes); the settings are under `policy` and
+  `jev_paper` in `config/default.yaml`.
+
 ## Live website
 
 `render.yaml` deploys the dashboard as one free Render web service. To set it up:
@@ -67,7 +95,7 @@ Requires Python 3.11 or newer.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'   # or '.[api]' for just the runtime plus the API server
-cp .env.example .env   # only needed to call Jev yourself, or for a private repo's forward log
+cp .env.example .env   # only needed to call Jev yourself
 pytest
 ```
 
@@ -78,15 +106,15 @@ To run the dashboard locally: `python -m jevtrade.api` in one terminal and
 
 Settings live in `config/default.yaml`, which is validated by pydantic models
 in `src/jevtrade/config.py`. Pass `--config path.yaml` to any CLI to use another
-file. Secrets are read **only** from environment variables (`.env`, which git
-ignores), never from YAML.
+file. A misspelled key is an error, not silently ignored. Secrets are read
+**only** from environment variables (`.env`, which git ignores), never from YAML.
 
 ```yaml
 data:
-  exchange: coinbaseexchange # api.exchange.coinbase.com; or kraken
+  exchange: coinbaseexchange # api.exchange.coinbase.com, the only exchange supported
   symbols: [BTC/USD, ETH/USD, ...]  # the 82 coins Jev is asked about hourly; all on Coinbase
   timeframe: 1h
-  page_limit: 300            # candles per request, clamped per exchange
+  page_limit: 300            # candles per request; Coinbase serves at most 300
   requests_trust_env: true   # honour HTTPS_PROXY / REQUESTS_CA_BUNDLE
 ```
 
@@ -94,7 +122,7 @@ data:
 
 | File | What it covers |
 |---|---|
-| [docs/forward-log.md](docs/forward-log.md) | The hourly forward log of Jev's answers: the collect workflow, collect-kick, the `data-log` branch |
+| [docs/forward-log.md](docs/forward-log.md) | The hourly forward log of Jev's answers: the collect workflow, the backup kick, the `data-log` branch, the Accuracy page |
 | [docs/jev_prompt.md](docs/jev_prompt.md) | The question Jev is asked and how its answer is read |
 
 ## Evaluation validity

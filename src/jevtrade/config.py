@@ -9,11 +9,13 @@ from __future__ import annotations
 import os
 import warnings
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .api.settings import ApiConfig
+from .data.fetcher import PAGE_CAP
 from .data.market import MarketConfig
 from .forward.settings import ForwardLogConfig, JevPaperConfig
 from .decision.base import DecisionConfig
@@ -36,13 +38,15 @@ def default_config_path() -> Path:
 
 
 class DataConfig(BaseModel):
-    # ccxt exchange id. coinbaseexchange is api.exchange.coinbase.com, which
-    # pages back through full hourly history; kraken serves only ~30 days.
-    exchange: str = "coinbaseexchange"
+    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
+
+    # ccxt exchange id: Coinbase Exchange (api.exchange.coinbase.com), whose public
+    # candles page back through full hourly history. The dashboard's market data
+    # comes from Coinbase too, so no other exchange is supported.
+    exchange: Literal["coinbaseexchange"] = "coinbaseexchange"
     symbols: list[str] = Field(default_factory=lambda: ["BTC/USD", "ETH/USD"])
     timeframe: str = "1h"
-    # Max candles per request; clamped to the exchange cap (coinbase 300, kraken 720).
-    page_limit: int = 300
+    page_limit: int = Field(PAGE_CAP, ge=1, le=PAGE_CAP)   # candles per request
     # Honour HTTPS_PROXY / REQUESTS_CA_BUNDLE env vars (ccxt ignores them by default).
     requests_trust_env: bool = True
 
@@ -55,6 +59,8 @@ class DataConfig(BaseModel):
 
 
 class AppConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
+
     data: DataConfig = Field(default_factory=DataConfig)
     features: FeatureConfig = Field(default_factory=FeatureConfig)
     state: StateConfig = Field(default_factory=StateConfig)

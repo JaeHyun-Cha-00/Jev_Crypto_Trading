@@ -19,7 +19,7 @@ import threading
 import time
 from typing import Callable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .. import net
 from ..net import HttpGet, redact
@@ -28,6 +28,7 @@ from ..net import HttpGet, redact
 class MarketConfig(BaseModel):
     """Live prices for the dashboard's coin list (jevtrade.data.market): public Coinbase data only."""
 
+    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
     enabled: bool = True
     base_url: str = "https://api.exchange.coinbase.com"
     stats_seconds: float = Field(5, ge=1)        # re-read 24-hour stats for all coins at most this often
@@ -59,6 +60,22 @@ def _f(v) -> float | None:
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def coinbase_prices(symbols: list[str], http_get: HttpGet | None = None,
+                    base_url: str = "https://api.exchange.coinbase.com", timeout_s: float = 20.0) -> dict[str, float]:
+    """Symbol -> Coinbase's last trade price right now, for every listed symbol, in one call."""
+    body = (http_get or net.get)(base_url.rstrip("/") + "/products/stats",
+                                 {"Accept": "application/json", "User-Agent": "jevtrade-collect"}, timeout_s)
+    stats = json.loads(body)
+    if not isinstance(stats, dict):
+        raise MarketError("unexpected /products/stats payload")
+    out = {}
+    for s in symbols:
+        last = _f(((stats.get(product_id(s)) or {}).get("stats_24hour") or {}).get("last"))
+        if last is not None and last > 0:
+            out[s] = last
+    return out
 
 
 def coin_row(symbol: str, stats: dict | None, spark: list[float] | None, name: str | None = None) -> dict:

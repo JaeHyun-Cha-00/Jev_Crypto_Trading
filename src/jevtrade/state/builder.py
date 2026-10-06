@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from ..features.compute import FeatureConfig
 
@@ -27,6 +27,8 @@ HARD_CONTEXT_LIMIT_TOKENS = 32_000
 
 
 class StateConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
+
     history_bars: int = 24          # recent bars listed individually
     percentile_window: int = 720    # bars used for percentile ranks (~30d at 1h)
     target_max_tokens: int = 2_000

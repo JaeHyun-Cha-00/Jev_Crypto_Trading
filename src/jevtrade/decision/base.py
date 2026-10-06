@@ -10,12 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..state.builder import MarketState
 
 
 class QuestionSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
+
     id: str            # used by code only
     instructions: str  # the full meaning of the question
     options: dict[str, str]  # option id -> criterion text
@@ -116,6 +118,7 @@ def default_questions(
 class JevConfig(BaseModel):
     """JevModel settings. The API key is read from the environment, never from YAML."""
 
+    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
     base_url: str = "https://openrouter.ai/api/v1"
     # A dated snapshot, so answers (and tuned thresholds) cannot drift silently.
     model: str = "typesafe/jev-1.13-20260917"
@@ -134,6 +137,8 @@ class JevConfig(BaseModel):
 
 
 class DecisionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
+
     horizon_bars: int = 4       # 4 bars = 4 hours on 1h candles
     flat_band_pct: float = 1.0  # "up" > +1%, "down" < -1%, otherwise "flat"
     adverse_move_pct: float = 3.0

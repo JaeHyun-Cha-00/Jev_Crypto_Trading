@@ -4,12 +4,13 @@ Runs the policy and simulator (jevtrade.policy, jevtrade.sim) over the
 answers Jev already gave in the hourly forward log (jevtrade.forward.log).
 It makes no model calls and no exchange calls: prices come from the log too.
 
-Orders fill when the collect run that logged the deciding row actually ran
-(its `called_at`), not at the next candle's open: GitHub's hourly schedule
-often starts tens of minutes late, sometimes hours. The fill price is
-interpolated between the open and close of the hour that contains
-`called_at`, by how far into the hour it falls; until that hour is logged the
-order stays pending. Rows without `called_at` fill at the next open. While a
+Orders fill when the collect run that logged the deciding row actually ran,
+not at the next candle's open: GitHub's hourly schedule often starts tens of
+minutes late, sometimes hours. A row with the coin's Coinbase price at that
+moment (`cb_price`, `cb_price_at`) fills right away at it. Otherwise the fill
+price is interpolated between the open and close of the hour that contains
+`called_at`, by how far into the hour it falls, and the order stays pending
+until that hour is logged. Rows without `called_at` fill at the next open. While a
 buy waits, that coin is treated as flat, and a newer answer that also says buy
 replaces the waiting order.
 
@@ -78,15 +79,19 @@ class Bar:
     volume: float | None = None   # base units; None on rows logged before it was recorded
 
 
-def _called_ms(row: dict | None) -> int | None:
-    """When the collect run asked Jev about this row, in ms; None if unknown."""
-    at = (row or {}).get("called_at")
+def _ms(at) -> int | None:
+    """An ISO-8601 time from the log in ms; None if missing or unreadable."""
     if not at:
         return None
     try:
         return int(datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp() * 1000)
     except ValueError:
         return None
+
+
+def _called_ms(row: dict | None) -> int | None:
+    """When the collect run asked Jev about this row, in ms; None if unknown."""
+    return _ms((row or {}).get("called_at"))
 
 
 def _fill_bar(bar: Bar, ts: int, due: int, tf_ms: int) -> Bar:
@@ -295,7 +300,9 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
     volumes = _dollar_volumes(bars, paper.volume_bars)
 
     def volume(sym: str, ts: int) -> float | None:
-        return volumes.get(sym, {}).get(ts)
+        # A fill at a logged price lands in an hour not logged yet: use the hour before.
+        v = volumes.get(sym, {})
+        return v.get(ts) if ts in v else v.get(ts - tf_ms)
 
     def spread(sym: str, ts: int) -> float:
         """Per-side spread in bps, from the coin's recent dollar volume."""
@@ -320,6 +327,7 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
     counts: dict[str, int] = defaultdict(int)
     peak = initial
     due: dict[str, int] = {}   # pending order -> when the run that queued it happened (ms)
+    filled_at: dict[str, int] = {}   # bought at a logged price -> when (ms), to stop-check only after it
 
     for ts in timeline:
         gate = skill.at(ts) if skill is not None else None
@@ -333,11 +341,16 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
             due.pop(s, None)
         # A position bought this hour is stop-checked from its fill price, not the hour's open.
         now.update({s: f for s, f in fills.items() if s in st.open})
+        for s, at in list(filled_at.items()):
+            if s in now and s in st.open and s not in fills:
+                now[s] = _fill_bar(now[s], ts, at, tf_ms)
+            filled_at.pop(s, None)
         hour = {}
         for sym in now:
             row = decisions.get((sym, ts))
             hour[sym] = (row, _decision(row) if row else None)
         first = len(actions)
+        quoted: dict[str, tuple[Bar, int]] = {}
         for sym in sim.symbols_by_priority(st, {s: d for s, (_, d) in hour.items()}):
             row, d = hour[sym]
             # A buy still waiting for its run is not a position yet: decide as if flat,
@@ -355,10 +368,20 @@ def replay(rows: list[dict], app_cfg, tf_ms: int) -> dict:
             elif action.kind in ("enter", "exit") and sym in st.pending:
                 called = _called_ms(row)
                 due[sym] = called if called is not None else ts + tf_ms
+                price, priced_at = _num((row or {}).get("cb_price")), _ms((row or {}).get("cb_price_at"))
+                if price and priced_at:   # logged when Jev was asked: fill now, at that price
+                    quoted[sym] = (Bar(price, price, price, price), priced_at)
             actions.append({"symbol": sym, "bar_ts": ts, "close": float(now[sym].close),
                             "status": row.get("status") if row else None,
                             "p_up": action.details.get("p_up"), "p_down": action.details.get("p_down"),
                             "action": action.kind, "reason": action.reason, "size_frac": action.size_frac})
+        if quoted:
+            # The run that asked Jev happened in the next hour: its fills land there, at the logged price.
+            trades += sim.fill_pending(st, ts + tf_ms, {s: b for s, (b, _) in quoted.items()})
+            for s, (_, at) in quoted.items():
+                due.pop(s, None)
+                if s in st.open:
+                    filled_at[s] = at
         hours.append(_hour(ts, [row for row, _ in hour.values()], actions[first:], picks.get(ts, []),
                            market.get(ts), horizon_ms, tf_ms))
         eq = st.equity()

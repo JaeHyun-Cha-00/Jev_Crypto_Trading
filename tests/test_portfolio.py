@@ -94,7 +94,9 @@ def test_entries_go_to_the_strongest_edge_not_alphabetical_order():
             row("MMM/USD", 0, 10.0, up=0.70, down=0.05),   # edge 0.65
             row("ZZZ/USD", 0, 10.0, up=0.80, down=0.00)]   # edge 0.80
     rows += [row(s, 1, 10.0) for s in ("AAA/USD", "MMM/USD", "ZZZ/USD")]
-    r = run(rows)
+    cfg = old_costs()
+    cfg.policy = cfg.policy.model_copy(update={"max_gross_exposure": 0.5})
+    r = run(rows, cfg)
     hour0 = [a for a in reversed(r["actions"]) if a["bar_ts"] == T0]
     assert [a["symbol"] for a in hour0] == ["ZZZ/USD", "MMM/USD", "AAA/USD"]
     bought = {a["symbol"]: a["size_frac"] for a in hour0 if a["action"] == "enter"}
@@ -335,3 +337,24 @@ def test_detail_curve_falls_back_to_hourly_equity_without_candles():
     curve = [{"bar_ts": T0, "equity": 1010.0, "cash": 500.0, "holdings": {"ETH/USD": 1.0}}]
     pts = detail_curve(curve, {}, T0, T0 + 2 * H, 900_000, H)
     assert pts == [{"ts": T0 + H, "equity": 1010.0}]
+
+
+def test_a_decision_with_a_logged_price_fills_right_away_at_it():
+    # Hour 0's answer was asked at 06:07 UTC, 7 minutes into hour 1, when Coinbase traded at 102.
+    rows = [dict(row("BTC/USD", 0, 100.0, up=0.6, down=0.1), called_at=_at(1, 7),
+                 cb_price=102.0, cb_price_at=_at(1, 5))]
+    r = run(rows)   # hour 1 isn't logged yet, but the buy is already filled
+    assert r["pending"] == []
+    [p] = r["positions"]
+    assert p["entry_ts"] == T0 + H and p["entry_price"] == pytest.approx(102.0 * 1.0002)
+
+
+def test_a_logged_price_fill_is_capped_by_the_last_known_volume():
+    cfg = old_costs()
+    cfg.jev_paper.max_volume_frac = 0.01
+    # $100 x 10 coins = $1,000 an hour: the buy may be at most $10, though the fill's hour has no volume yet.
+    rows = [dict(_ohlc(row("THIN/USD", 0, 100.0, up=0.6, down=0.1), 100.0, 100.0, 100.0, 10.0),
+                 cb_price=100.0, cb_price_at=_at(1, 5))]
+    [p] = run(rows, cfg)["positions"]
+    assert p["qty"] * p["entry_price"] == pytest.approx(10.0, rel=1e-3)
+
