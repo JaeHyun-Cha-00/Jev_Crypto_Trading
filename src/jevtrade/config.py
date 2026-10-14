@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .api.settings import ApiConfig
 from .data.fetcher import PAGE_CAP
@@ -20,7 +20,6 @@ from .data.market import MarketConfig
 from .forward.settings import ForwardLogConfig, JevPaperConfig
 from .decision.base import DecisionConfig
 from .features.compute import FeatureConfig
-from .policy.engine import PolicyConfig
 from .state.builder import StateConfig
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "default.yaml"
@@ -65,19 +64,10 @@ class AppConfig(BaseModel):
     features: FeatureConfig = Field(default_factory=FeatureConfig)
     state: StateConfig = Field(default_factory=StateConfig)
     decision: DecisionConfig = Field(default_factory=DecisionConfig)
-    policy: PolicyConfig = Field(default_factory=PolicyConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     forward_log: ForwardLogConfig = Field(default_factory=ForwardLogConfig)
     jev_paper: JevPaperConfig = Field(default_factory=JevPaperConfig)
     market: MarketConfig = Field(default_factory=MarketConfig)
-
-    @model_validator(mode="after")
-    def _holding_follows_horizon(self) -> "AppConfig":
-        # Unless set explicitly, positions are held no longer than the horizon
-        # the direction question asks about, so the two stay in sync.
-        if "max_holding_bars" not in self.policy.model_fields_set:
-            self.policy.max_holding_bars = self.decision.horizon_bars
-        return self
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:

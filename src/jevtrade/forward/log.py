@@ -4,8 +4,9 @@ The collect workflow writes `decisions/YYYY-MM-DD.jsonl` and
 `outcomes/YYYY-MM-DD.jsonl` (see jevtrade.collect.collector); it never
 reads `state/`, the gzip files of state text. This module
 loads them from a local directory or from GitHub over HTTPS, joins each
-decision with its outcome, and scores Jev's direction calls against naive
-baselines. It only reads: no writes, no model calls, no exchange calls.
+decision with its outcome, and scores Jev's choices: whether each buy, wait,
+hold and sell was right given what the price did over the horizon. It only
+reads: no writes, no model calls, no exchange calls.
 """
 
 from __future__ import annotations
@@ -29,13 +30,13 @@ from .settings import ForwardLogConfig
 
 log = logging.getLogger(__name__)
 
-DIRECTIONS = ("up", "flat", "down")
 FOLDERS = ("decisions", "outcomes")
-# Confidence bins for the calibration table: [lo, hi).
-CAL_EDGES = (0.0, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
+CHOICES = {"entry": ("buy_small", "buy_normal", "buy_large", "wait"), "manage": ("hold", "sell")}
+BUYS = CHOICES["entry"][:3]
+# p(buy) bins for the calibration table: [lo, hi).
+CAL_EDGES = (0.0, 0.1, 0.2, 0.4, 0.6, 1.0)
 _DAYFILE = re.compile(r"^\d{4}-\d{2}-\d{2}\.jsonl$")
 _DROP = ("state", "raw_response")   # large, and not for the browser
-_EPS = 1e-6
 _API = "https://api.github.com"
 _RAW = "https://raw.githubusercontent.com"
 
@@ -62,43 +63,45 @@ def parse_jsonl(text: str) -> list[dict]:
 
 
 def _final_decisions(decisions: list[dict]) -> dict[tuple[str, int], dict]:
-    """One decision per (symbol, candle_ts). An `error` line is superseded by its retry."""
+    """One decision per (symbol, candle_ts): the latest line wins."""
     final: dict[tuple[str, int], dict] = {}
     for d in sorted(decisions, key=lambda r: str(r.get("called_at") or "")):
-        key = (d["symbol"], d["candle_ts"])
-        prev = final.get(key)
-        if prev is None or prev.get("status") == "error" or d.get("status") != "error":
-            final[key] = d
+        final[(d["symbol"], d["candle_ts"])] = d
     return final
 
 
-def _confidence(ans: dict) -> float | None:
-    if ans.get("confidence") is not None:
-        return float(ans["confidence"])
-    probs = ans.get("probabilities") or {}
-    return float(max(probs.values())) if probs else None
+def right(question: str | None, pick: str | None, ret: float, round_trip: float) -> bool | None:
+    """Whether a choice beat its alternative over the horizon (`ret` and `round_trip` as fractions).
+
+    A buy is right when the move more than repaid a round trip of costs, and
+    a wait when it didn't. Holding is right when the price then rose, and
+    selling when it didn't: the exit is paid either way.
+    """
+    if question == "entry" and pick in CHOICES["entry"]:
+        return (ret > round_trip) == (pick != "wait")
+    if question == "manage" and pick in CHOICES["manage"]:
+        return (ret > 0) == (pick == "hold")
+    return None
 
 
-def join(decisions: list[dict], outcomes: list[dict]) -> list[dict]:
-    """Decision rows with `outcome` (None until the horizon closes) and a scored `hit`."""
+def join(decisions: list[dict], outcomes: list[dict], round_trip: float = 0.0) -> list[dict]:
+    """Decision rows with their `outcome` (None until the horizon closes) and whether the choice was `right`."""
     outs = {(o["symbol"], o["candle_ts"]): o for o in outcomes}
     rows = []
     for key, d in _final_decisions(decisions).items():
-        answers = d.get("answers") or {}
-        direction = answers.get("direction") or {}
+        q = d.get("question")
+        ans = (d.get("answers") or {}).get(q) or {} if d.get("status") == "answered" else {}
+        pick = ans.get("choice") if ans.get("choice") in CHOICES.get(q, ()) else None
+        probs = ans.get("probabilities") or {}
         o = outs.get(key)
-        pred = direction.get("choice") if d.get("status") == "answered" else None
-        if pred not in DIRECTIONS:
-            pred = None
-        realized = o.get("direction") if o else None
         row = {k: v for k, v in d.items() if k not in _DROP}
         row.update(
-            predicted=pred,
-            confidence=_confidence(direction) if pred else None,
-            regime=(answers.get("regime") or {}).get("choice") if pred else None,
-            p_adverse=(answers.get("adverse_move") or {}).get("noul") if pred else None,
+            choice=pick,
+            p_choice=float(probs[pick]) if pick and pick in probs else None,
+            p_buy=round(sum(float(probs.get(b) or 0) for b in BUYS), 6) if pick and q == "entry" else None,
+            p_sell=float(probs.get("sell") or 0) if pick and q == "manage" else None,
             outcome=o,
-            hit=(pred == realized) if pred and realized in DIRECTIONS else None,
+            right=right(q, pick, o["ret_pct"] / 100, round_trip) if pick and o else None,
         )
         rows.append(row)
     rows.sort(key=lambda r: (-r["candle_ts"], r["symbol"]))
@@ -108,86 +111,45 @@ def join(decisions: list[dict], outcomes: list[dict]) -> list[dict]:
 # --------------------------------------------------------------- metrics
 
 
-def _norm(probs: dict, labels) -> list[float] | None:
-    vals = [max(float(probs.get(k) or 0.0), 0.0) for k in labels]
-    s = sum(vals)
-    return [v / s for v in vals] if s > 0 else None
-
-
 def _rate(k: int, n: int) -> float | None:
     return k / n if n else None
 
 
-def metrics(rows: list[dict], cost_usd: float = 0.0) -> dict:
-    """Counts, hit rate vs. baselines, confusion matrix, calibration and scores for `rows`."""
+def _group(rows: list[dict]) -> dict:
+    rets = [r["outcome"]["ret_pct"] / 100 for r in rows]
+    return {"n": len(rows), "mean_ret": sum(rets) / len(rets) if rets else None,
+            "up_rate": _rate(sum(x > 0 for x in rets), len(rets)),
+            "right_rate": _rate(sum(bool(r["right"]) for r in rows), len(rows))}
+
+
+def metrics(rows: list[dict], cost_usd: float = 0.0, round_trip: float = 0.0) -> dict:
+    """Counts, and Jev's choices scored by what the price did over the horizon."""
     counts = Counter(r.get("status") for r in rows)
-    waiting = [r for r in rows if r["predicted"] and r["outcome"] is None]
-    scored = [r for r in rows if r["hit"] is not None]
-    n = len(scored)
-    realized = Counter(r["outcome"]["direction"] for r in scored)
-    # Most common realized class, in hindsight; ties go to flat, the usual majority.
-    majority = max(DIRECTIONS, key=lambda c: (realized[c], c == "flat")) if n else None
-
-    confusion = {p: {a: 0 for a in DIRECTIONS} for p in DIRECTIONS}
-    for r in scored:
-        confusion[r["predicted"]][r["outcome"]["direction"]] += 1
-
+    waiting = [r for r in rows if r["choice"] and r["outcome"] is None]
+    scored = [r for r in rows if r["right"] is not None]
+    by = lambda q, c: [r for r in scored if r.get("question") == q and r["choice"] == c]  # noqa: E731
+    entries = [r for r in scored if r.get("question") == "entry"]
     calibration = []
     for lo, hi in zip(CAL_EDGES, CAL_EDGES[1:]):
-        b = [r for r in scored if r["confidence"] is not None
-             and lo <= r["confidence"] < (hi if hi < 1 else math.inf)]
-        calibration.append({"lo": lo, "hi": hi, "n": len(b),
-                            "mean_confidence": sum(r["confidence"] for r in b) / len(b) if b else None,
-                            "hit_rate": _rate(sum(r["hit"] for r in b), len(b))})
-
-    # Direction: multi-class Brier (sum over classes) and log loss, next to the
-    # Brier of always forecasting the realized base rates.
-    briers, losses = [], []
-    freq = [realized[c] / n for c in DIRECTIONS] if n else None
-    base_briers = []
-    for r in scored:
-        p = _norm(((r.get("answers") or {}).get("direction") or {}).get("probabilities") or {}, DIRECTIONS)
-        if p is None:
-            continue
-        y = [1.0 if c == r["outcome"]["direction"] else 0.0 for c in DIRECTIONS]
-        briers.append(sum((pi - yi) ** 2 for pi, yi in zip(p, y)))
-        losses.append(-math.log(max(p[y.index(1.0)], _EPS)))
-        base_briers.append(sum((fi - yi) ** 2 for fi, yi in zip(freq, y)))
-
-    # adverse_move is a Noul: `noul` is P(yes).
-    adv = [(float(r["p_adverse"]), bool(r["outcome"]["adverse_move"])) for r in rows
-           if r["predicted"] and r["outcome"] and r["p_adverse"] is not None
-           and r["outcome"].get("adverse_move") is not None]
-    adv_rate = _rate(sum(y for _, y in adv), len(adv))
-
-    mean = lambda xs: sum(xs) / len(xs) if xs else None  # noqa: E731
+        b = [r for r in entries if lo <= r["p_buy"] < (hi if hi < 1 else math.inf)]
+        calibration.append({"lo": lo, "hi": hi, **_group(b)})
     return {
         "decisions": len(rows),
         "answered": counts.get("answered", 0),
         "abstain": counts.get("abstain", 0),
         "error": counts.get("error", 0),
-        "scored": n,
+        "scored": len(scored),
         "pending": len(waiting),
         "oldest_pending_ts": min((r["candle_ts"] for r in waiting), default=None),   # the next call to be scored
-        "hits": sum(r["hit"] for r in scored),
-        "hit_rate": _rate(sum(r["hit"] for r in scored), n),
-        "realized": {c: realized[c] for c in DIRECTIONS},
-        "baselines": {
-            "majority": {"label": majority, "hit_rate": _rate(realized[majority], n) if n else None},
-            "always_flat": {"label": "flat", "hit_rate": _rate(realized["flat"], n)},
-        },
-        "confusion": {"labels": list(DIRECTIONS),   # rows: predicted, columns: realized
-                      "matrix": [[confusion[p][a] for a in DIRECTIONS] for p in DIRECTIONS]},
+        "right": sum(bool(r["right"]) for r in scored),
+        "right_rate": _rate(sum(bool(r["right"]) for r in scored), len(scored)),
+        "round_trip": round_trip,
+        # Every scored entry call, bought or not: the market Jev chose from.
+        "entry_all": _group(entries),
+        "entry": {c: _group(by("entry", c)) for c in CHOICES["entry"]},
+        "buys": _group([r for r in entries if r["choice"] in BUYS]),
+        "manage": {c: _group(by("manage", c)) for c in CHOICES["manage"]},
         "calibration": calibration,
-        "direction_scores": {"n": len(briers), "brier": mean(briers), "log_loss": mean(losses),
-                             "brier_base_rate": mean(base_briers)},
-        "adverse_move_scores": {
-            "n": len(adv),
-            "brier": mean([(p - y) ** 2 for p, y in adv]),
-            "log_loss": mean([-math.log(max(p if y else 1 - p, _EPS)) for p, y in adv]),
-            "base_rate": adv_rate,
-            "brier_base_rate": adv_rate * (1 - adv_rate) if adv_rate is not None else None,
-        },
         "cost_usd": cost_usd,
     }
 
@@ -208,8 +170,9 @@ class ForwardLog:
     keeps serving the last good data and reports the error."""
 
     def __init__(self, cfg: ForwardLogConfig, http_get: HttpGet | None = None,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, round_trip: float = 0.0):
         self.cfg = cfg
+        self.round_trip = round_trip   # a buy is right when the move beat this (a fraction)
         self._get = http_get
         self._clock = clock
         self._lock = threading.Lock()
@@ -252,8 +215,9 @@ class ForwardLog:
             "last_candle_ts": snap.rows[0]["candle_ts"] if snap.rows else None,
             "files": snap.files,
             "error": self._error,
-            "overall": metrics(snap.rows, sum(snap.cost_by_symbol.values())),
-            "per_symbol": {s: metrics(rs, snap.cost_by_symbol.get(s, 0.0)) for s, rs in sorted(by_sym.items())},
+            "overall": metrics(snap.rows, sum(snap.cost_by_symbol.values()), self.round_trip),
+            "per_symbol": {s: metrics(rs, snap.cost_by_symbol.get(s, 0.0), self.round_trip)
+                           for s, rs in sorted(by_sym.items())},
         }
 
     def rows(self, symbol: str | None = None, limit: int = 100) -> list[dict]:
@@ -276,7 +240,7 @@ class ForwardLog:
         cost: dict[str, float] = defaultdict(float)
         for d in data["decisions"]:   # every call, retried errors included
             cost[d["symbol"]] += float(d.get("cost_usd") or 0.0)
-        return Snapshot(rows=join(data["decisions"], data["outcomes"]), cost_by_symbol=dict(cost),
+        return Snapshot(rows=join(data["decisions"], data["outcomes"], self.round_trip), cost_by_symbol=dict(cost),
                         files=files, fetched_at=self._clock())
 
     def _newest(self, names: list[str]) -> list[str]:

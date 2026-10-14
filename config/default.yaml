@@ -3,7 +3,7 @@
 
 data:
   exchange: coinbaseexchange # api.exchange.coinbase.com, the only exchange supported
-  # The coins Jev is asked about every hour and the dashboard lists, all with a
+  # The coins Jev trades every hour and the dashboard lists, all with a
   # Coinbase USD market (no stablecoins or PAXG). Fixed so Jev is measured on
   # the same coins every day: edit this list to add or drop one. A coin
   # Coinbase stops serving is skipped for that run. Oldest listings first, so a
@@ -39,12 +39,14 @@ state:
   target_max_tokens: 2000
 
 decision:
-  # Jev is asked about the next 24 hours and a 3% band: a Coinbase Advanced
-  # round trip costs ~1.2-1.8%, so "up" means a move that still pays after costs. Over 180 days
-  # of these coins a 4-hour, 1% "up" averaged only +2.5%.
-  horizon_bars: 24           # direction horizon: 24 bars = 24 hours on 1h candles
-  flat_band_pct: 3.0         # "up" > +3%, "down" < -3%, otherwise "flat"
-  adverse_move_pct: 8.0      # matches policy.stop_loss_pct; see docs/jev_prompt.md
+  # Jev trades with a fixed prompt (src/jevtrade/decision/agent.py, shown in
+  # docs/jev_prompt.md): each hour it chooses buy_small / buy_normal / buy_large /
+  # wait for a coin the account doesn't hold, and hold / sell for one it does.
+  # The settings below only score those choices afterwards (the collector's
+  # outcomes): the close 24 hours later, labelled up / flat / down at 3%.
+  horizon_bars: 24
+  flat_band_pct: 3.0
+  adverse_move_pct: 8.0
   jev:                       # key comes from $OPENROUTER_API_KEY, never from YAML
     base_url: https://openrouter.ai/api/v1
     model: typesafe/jev-1.13-20260917   # pinned snapshot; aliases are rejected
@@ -53,50 +55,23 @@ decision:
     max_retries: 2
     price_per_input_token_usd: 0.000000042   # $0.042 / Mtok input, output free
 
-policy:                      # all risk limits live here, enforced in code
-  entry_threshold: 0.60      # min p(up) to open a long
-  min_edge: 0.40             # min p(up) - p(down)
-  exit_threshold: 0.40       # p(down) that closes a long...
-  exit_min_edge: 0.30        # ...when p(down) - p(up) is also at least this
-  # Sizing is risk-based: notional = equity x risk_per_trade / stop distance,
-  # capped at max_position_frac. With an 8% stop that is 12.5% of equity per
-  # position, so up to 8 coins fit under max_gross_exposure (all of equity).
-  risk_per_trade: 0.01       # equity at risk if the stop is hit
-  # 8%: with no time exit a position is held for days, and over the last 180
-  # days these coins dipped 3% within 3 days 62% of the time (8%: 21%).
-  stop_loss_pct: 0.08
-  stop_slippage_bps: 5       # stops trigger on the bar low; fill at stop (or gap open) less this
-  max_position_frac: 0.50    # per-symbol notional / equity
-  max_gross_exposure: 1.00   # all positions / equity; 1.0 = fully invested, no cash held back
-  min_trade_frac: 0.01
-  max_daily_loss_pct: 0.03   # blocks new entries for the rest of the UTC day
-  cooldown_after_losses: 3
-  cooldown_bars: 24
-  min_trade_interval_bars: 0 # bars after an exit before the same symbol can re-enter (0 = right away)
-  # max_holding_bars defaults to decision.horizon_bars (24); set it here to override.
-  max_holding_bars_by_model: # per decision model; null = no time exit
-    jev: null                # holds until p(down) >= exit_threshold or the stop
-
-jev_paper:                   # the dashboard's Jev portfolio, replayed from the forward log
+jev_paper:                   # Jev's paper account (src/jevtrade/forward/agent.py)
   initial_equity: 10000
+  # The share of equity each buy size spends. Jev picks the size; a buy is cut
+  # to the cash left. No stop-loss, time limit or position cap: a position
+  # stays open until Jev sells it.
+  sizes: {small: 0.05, normal: 0.10, large: 0.20}
   # Coinbase Advanced costs: a taker fee on every fill plus half the order-book
   # spread. 0.60% is the taker fee at the lowest volume tier (under $10k a
   # month; it falls with volume). The spread is tight on deep markets (BTC,
-  # ETH) and wider on thin coins. A round trip costs ~1.2-1.8%.
+  # ETH) and wider on thin coins. A round trip costs ~1.2-1.8%; Jev's mandate
+  # quotes the fee plus a mid-depth spread (0.8% a side, 1.5% a round trip).
   fee_bps: 60                # per side, on notional
   slippage_bps: 0            # beyond the spread
   spread_bps: 2              # per side from the mid, deep markets (BTC, ETH)
   thin_extra_bps: 30         # added for thin coins: in full at 100x below ref_volume_usd (log scale)
   ref_volume_usd: 5000000    # hourly Coinbase dollar volume (median of the last 24 logged hours)
   volume_bars: 24
-  max_volume_frac: 0.01      # a buy is at most 1% of that hourly dollar volume; null = no cap
-  # Skill gate: when set, buy only while Jev's buy signals of the last
-  # gate_lookback_hours (every answer that met the buy thresholds) returned more
-  # than their round-trip cost and more than the average coin over the next 24
-  # hours, once gate_min_signals of them have resolved. Off (null): Jev trades
-  # every signal the policy accepts, so the portfolio shows how it really trades.
-  gate_lookback_hours: null
-  gate_min_signals: 500
 
 api:                         # python -m jevtrade.api   (GET only)
   host: 127.0.0.1            # 0.0.0.0 inside docker; keep it off the public internet
@@ -109,18 +84,16 @@ forward_log:                 # the dashboard's "Jev forward log": the collect wo
   branch: data-log
   local_dir: data-log        # for source: local (e.g. `git worktree add data-log origin/data-log`)
   refresh_seconds: 300       # re-read at most this often; on failure the last good data is kept
-  max_days: 30               # newest day files to load
+  max_days: 400              # newest day files to load; the account replays from `start`, so reach back that far
   token_env: GITHUB_TOKEN    # optional token for a private repo or higher GitHub rate limits
-  # Fresh start (candle open, UTC). The collect workflow never asks Jev about an
-  # earlier candle (its backfill stops here), and the dashboard ignores earlier
-  # lines, so the portfolio starts at its full balance and the accuracy stats
-  # start empty from this hour. null: no cutoff. Earlier lines stay on data-log.
-  # 2026-10-06T18:00Z is the 11:00 PDT candle, so the first decision is at
-  # 12:00 PDT: version 1, the first hour whose decisions carry the Coinbase price
-  # they were made at (cb_price), so every buy fills right away.
-  # (Earlier starts: 2026-10-06T17:00Z, before the price was logged;
-  # 2026-10-05T17:00Z, when the question moved to 24 hours and 3%.)
-  start: "2026-10-06T18:00:00Z"
+  # Fresh start (candle open, UTC): the account opens with initial_equity in
+  # cash at this candle. The collect workflow never asks Jev about an earlier
+  # candle, and the dashboard ignores earlier lines. Earlier lines stay on data-log.
+  # 2026-10-14T23:00Z (16:00 PDT) is the first candle of version 2, the agent
+  # prompt (agent-1): its first decision is just after 00:00Z.
+  # (Earlier starts, with the old direction questions and rule-based policy:
+  # 2026-10-06T18:00Z, 2026-10-06T17:00Z, 2026-10-05T17:00Z.)
+  start: "2026-10-14T23:00:00Z"
 
 market:                      # the dashboard's live coin list and coin pages: public Coinbase data, no keys
   enabled: true

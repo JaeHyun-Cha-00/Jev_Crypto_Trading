@@ -3,7 +3,7 @@ name: collect
 # Hourly forward collection: Jev answers for every closed 1h candle of each
 # coin in config/default.yaml (data.symbols), plus realized outcomes,
 # committed to the `data-log` branch.
-# No trading and no simulated positions. Every Jev call costs money.
+# Jev trades a paper account (simulated, never real orders). Every Jev call costs money.
 
 on:
   schedule:

@@ -6,7 +6,7 @@ import math
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ForwardLogConfig(BaseModel):
@@ -18,7 +18,9 @@ class ForwardLogConfig(BaseModel):
     branch: str = "data-log"
     local_dir: str = "data-log"     # for source: local, e.g. a `git worktree` of the branch
     refresh_seconds: int = Field(300, ge=10)
-    max_days: int = Field(30, ge=1)  # newest day files to load
+    # Newest day files to load. The account is replayed from forward_log.start,
+    # so this must reach back that far.
+    max_days: int = Field(400, ge=1)
     token_env: str = "GITHUB_TOKEN"  # optional; private repos and higher rate limits
     timeout_s: float = Field(20, gt=0)
     # Fresh-start cutoff (UTC candle open). The collector never asks Jev about an
@@ -34,7 +36,7 @@ class ForwardLogConfig(BaseModel):
 
 
 class JevPaperConfig(BaseModel):
-    """Costs for the dashboard's Jev portfolio (jevtrade.forward.portfolio), Coinbase Advanced by default.
+    """Jev's paper account (jevtrade.forward.agent): buy sizes and Coinbase Advanced costs.
 
     Each side pays `fee_bps` plus a spread from the mid: `spread_bps`, plus up
     to `thin_extra_bps` for coins with little Coinbase volume (in full at 100x
@@ -50,17 +52,21 @@ class JevPaperConfig(BaseModel):
     thin_extra_bps: float = Field(30.0, ge=0, lt=10_000)
     ref_volume_usd: float = Field(5_000_000, gt=0)
     volume_bars: int = Field(24, ge=1)
-    # A buy never exceeds this share of the coin's median hourly dollar volume;
-    # null = no cap. Hours with no volume logged are not capped.
-    max_volume_frac: float | None = Field(0.01, gt=0, le=1)
-    # Skill gate: buy only while Jev's recent buy signals would have paid. A
-    # signal is any answer that met the policy's buy thresholds, bought or not;
-    # it resolves decision.horizon_bars later. New buys are allowed only while
-    # the signals of the last `gate_lookback_hours` that have resolved returned
-    # more than their round-trip cost on average, and at least
-    # `gate_min_signals` of them have. null = no gate.
-    gate_lookback_hours: int | None = Field(None, ge=1)
-    gate_min_signals: int = Field(30, ge=1)
+    # The share of equity each of Jev's buy sizes spends (jevtrade.decision.agent);
+    # a buy is cut to the cash left.
+    sizes: dict[str, float] = Field(default_factory=lambda: {"small": 0.05, "normal": 0.10, "large": 0.20})
+    min_order_usd: float = Field(1.0, ge=0)   # a buy smaller than this (cash all but gone) is skipped
+
+    @field_validator("sizes")
+    @classmethod
+    def _three_sizes(cls, v: dict[str, float]) -> dict[str, float]:
+        if set(v) != {"small", "normal", "large"} or not all(0 < f <= 1 for f in v.values()):
+            raise ValueError("sizes needs small, normal and large, each a share of equity in (0, 1]")
+        return v
+
+    def typical_side_cost(self) -> float:
+        """One fill's cost as a fraction, at a mid-depth coin's spread: what Jev's mandate quotes."""
+        return round((self.fee_bps + self.slippage_bps + self.spread_bps + self.thin_extra_bps / 2) / 10_000, 4)
 
     def spread_for(self, dollar_volume: float | None) -> float:
         """Per-side spread in bps for a coin trading `dollar_volume` an hour; unknown pays the most."""

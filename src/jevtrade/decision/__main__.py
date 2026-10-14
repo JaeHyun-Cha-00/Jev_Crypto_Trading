@@ -3,8 +3,9 @@
     python -m jevtrade.decision [--symbol BTC/USD] [--config PATH] [--record DIR]
 
 Fetches recent public candles (the same lookback the hourly collector uses,
-so the state text matches what Jev is shown there), builds the market
-state, asks Jev the configured questions once, and prints the raw response,
+so the market state matches what Jev is shown there), adds the mandate and
+an all-cash account, asks Jev the `entry` question once (what it would do
+with a coin it doesn't hold), and prints the raw response,
 latency, input tokens and cost. Nothing is logged. `--record DIR` saves the state and response
 body as a test fixture (no headers, so no credentials).
 """
@@ -23,6 +24,7 @@ from ..data.fetcher import OHLCVSource, fetch_range, public_exchange
 from ..data.timeframes import last_closed_open_ms, timeframe_ms
 from ..features.compute import compute_features
 from ..state.builder import MarketState, build_state
+from . import agent
 from .jev import JevModel
 
 
@@ -39,6 +41,13 @@ def latest_state(cfg, source: OHLCVSource, symbol: str, now_ms: int):
     state: MarketState | None = build_state(candles, compute_features(candles, cfg.features),
                                             cfg.decision.horizon_bars, d.timeframe, cfg.state, cfg.features)
     return candles, state
+
+
+def entry_state(cfg, market: MarketState) -> tuple[MarketState, list]:
+    """The state and question Jev gets for a coin an all-cash account doesn't hold (the first hour's view)."""
+    questions, side_cost = agent.configured(cfg)
+    view = agent.View({"cash_pct_of_equity": 100.0, "assets_held": 0}, None)
+    return agent.agent_state(market, view, side_cost), [questions["entry"]]
 
 
 def _pretty(raw: str) -> str:
@@ -64,7 +73,7 @@ def main() -> None:
     if state is None:
         raise SystemExit(f"not enough history for {symbol}: {len(candles)} candles")
 
-    questions = cfg.decision.resolved_questions(cfg.data.timeframe)
+    state, questions = entry_state(cfg, state)
     d = JevModel(cfg.decision.jev).decide(state, questions)
 
     print(f"symbol={symbol} last_closed_bar={candles.index[-1].isoformat()} "

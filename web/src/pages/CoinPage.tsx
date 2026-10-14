@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { TIMEFRAMES, getForwardRows } from "../lib/api";
+import { ACTION_LABEL, CHOICE_LABEL, TIMEFRAMES, getForwardRows } from "../lib/api";
 import type { Book, ForwardRow, JevPaper, Timeframe } from "../lib/api";
 import { CandleChart } from "../components/CandleChart";
 import type { ChartLine, ChartMark } from "../components/CandleChart";
@@ -65,20 +65,18 @@ function Tape({ symbol }: { symbol: string }) {
   );
 }
 
-const CALL_LABEL: Record<string, string> = { up: "Up", flat: "Flat", down: "Down" };
-const ACTION_LABEL: Record<string, string> = { enter: "buy", exit: "sell", hold: "hold", skip: "pass" };
+const HOUR_MS = 3_600_000;
 
 function JevPanel({ symbol, coin, paper, rows }: { symbol: string; coin?: LiveCoin; paper: JevPaper | null; rows: ForwardRow[] }) {
   const base = symbol.split("/")[0];
   const pos = paper?.positions.find((p) => p.symbol === symbol);
-  const pending = paper?.pending.find((p) => p.symbol === symbol && p.kind === "enter");
   const last = paper?.actions.find((a) => a.symbol === symbol);
   const trades = (paper?.trades ?? []).filter((t) => t.symbol === symbol);
   const stats = paper?.per_symbol[symbol];
   const price = coin?.price ?? pos?.mark ?? null;
   const live = pos && price !== null ? pos.qty * (price - pos.entry_price) : null;
-  const scored = rows.filter((r) => r.hit !== null);
-  const hits = scored.filter((r) => r.hit).length;
+  const scored = rows.filter((r) => r.right !== null);
+  const hits = scored.filter((r) => r.right).length;
 
   return (
     <section className="card">
@@ -96,25 +94,25 @@ function JevPanel({ symbol, coin, paper, rows }: { symbol: string; coin?: LiveCo
             </>
           ) : (
             <>
-              <div className="tile-value">{pending ? "Buying" : "None"}</div>
-              <div className="tile-sub">{pending ? `${fmtPct(pending.size_frac, false)} of equity next hour` : "Jev isn't holding it"}</div>
+              <div className="tile-value">None</div>
+              <div className="tile-sub">Jev isn't holding it</div>
             </>
           )}
         </div>
         <div className="tile">
           <div className="tile-label">Unrealized P&amp;L (live)</div>
           <div className={`tile-value ${tone(live) ?? ""}`}>{live === null ? "–" : fmtMoney(live)}</div>
-          <div className="tile-sub">{pos && price !== null ? `${fmtPct(price / pos.entry_price - 1)} · stop ${fmtPrice(pos.stop_price)}` : "before trading costs"}</div>
+          <div className="tile-sub">{pos && price !== null ? `${fmtPct(price / pos.entry_price - 1)} · held ${pos.hours_held}h` : "before trading costs"}</div>
         </div>
         <div className="tile">
           <div className="tile-label">Last call</div>
           <div className="tile-value">
-            {last && last.status === "answered" ? (
-              <><span className="up">{Math.round(last.p_up * 100)}%</span> <span className="muted small">up</span></>
+            {last && last.choice ? (
+              <>{CHOICE_LABEL[last.choice]} <span className="muted small">{Math.round((last.p[last.choice] ?? 0) * 100)}%</span></>
             ) : "–"}
           </div>
           <div className="tile-sub">
-            {last ? `${fmtTime(last.bar_ts)} · p(down) ${last.status === "answered" ? Math.round(last.p_down * 100) + "%" : "–"} · ${ACTION_LABEL[last.action]}` : "no call yet"}
+            {last ? `${fmtTime(last.bar_ts + HOUR_MS)} · ${ACTION_LABEL[last.action]}` : "no call yet"}
           </div>
         </div>
         <div className="tile">
@@ -123,7 +121,7 @@ function JevPanel({ symbol, coin, paper, rows }: { symbol: string; coin?: LiveCo
           <div className="tile-sub">{trades.length} trade{trades.length === 1 ? "" : "s"} · {stats?.buys ?? 0} buys</div>
         </div>
         <div className="tile">
-          <div className="tile-label">Direction calls right</div>
+          <div className="tile-label">Choices right</div>
           <div className="tile-value">{scored.length ? fmtPct(hits / scored.length, false) : "–"}</div>
           <div className="tile-sub">{hits} of {scored.length} scored</div>
         </div>
@@ -137,20 +135,20 @@ function JevPanel({ symbol, coin, paper, rows }: { symbol: string; coin?: LiveCo
           <table>
             <thead>
               <tr>
-                <th>Hour ({TZ})</th><th className="num">Close</th><th>Call</th><th className="num">Confidence</th>
-                <th className="num">p(−3%)</th><th className="num">Moved</th><th>Result</th>
+                <th>Decided ({TZ})</th><th className="num">Close</th><th>Holding</th><th>Jev chose</th>
+                <th className="num">p</th><th className="num">Moved</th><th>Result</th>
               </tr>
             </thead>
             <tbody>
               {rows.slice(0, 48).map((r) => (
                 <tr key={`${r.candle_ts}-${r.called_at}`}>
-                  <td>{fmtTime(r.candle_ts)}</td>
+                  <td>{fmtTime(r.candle_ts + HOUR_MS)}</td>
                   <td className="num">{fmtPrice(r.close)}</td>
-                  <td>{r.status === "answered" && r.predicted ? <span className={`tag ${r.predicted === "up" ? "buy" : r.predicted === "down" ? "sell" : ""}`}>{CALL_LABEL[r.predicted]}</span> : <span className="muted">{r.status}</span>}</td>
-                  <td className="num">{r.confidence === null ? "–" : `${Math.round(r.confidence * 100)}%`}</td>
-                  <td className="num">{r.p_adverse === null ? "–" : `${Math.round(r.p_adverse * 100)}%`}</td>
+                  <td className="muted">{r.question === "manage" ? "yes" : r.question === "entry" ? "no" : "–"}</td>
+                  <td>{r.choice ? <span className={`tag ${r.choice.startsWith("buy") ? "buy" : r.choice === "sell" ? "sell" : ""}`}>{CHOICE_LABEL[r.choice]}</span> : <span className="muted">{r.status}</span>}</td>
+                  <td className="num">{r.p_choice === null ? "–" : `${Math.round(r.p_choice * 100)}%`}</td>
                   <td className={`num ${tone(r.outcome?.ret_pct) ?? ""}`}>{r.outcome ? `${r.outcome.ret_pct > 0 ? "+" : ""}${r.outcome.ret_pct.toFixed(2)}%` : "pending"}</td>
-                  <td>{r.hit === null ? <span className="muted">–</span> : <span className={`tag ${r.hit ? "hit" : "miss"}`}>{r.hit ? "right" : "wrong"}</span>}</td>
+                  <td>{r.right === null ? <span className="muted">–</span> : <span className={`tag ${r.right ? "hit" : "miss"}`}>{r.right ? "right" : "wrong"}</span>}</td>
                 </tr>
               ))}
             </tbody>
@@ -233,8 +231,8 @@ export function CoinPage({
     return out;
   }, [paper, symbol, pos]);
   const lines = useMemo<ChartLine[]>(
-    () => (pos ? [{ price: pos.entry_price, title: "Jev entry", kind: "entry" }, { price: pos.stop_price, title: "Stop", kind: "stop" }] : []),
-    [pos?.entry_price, pos?.stop_price],
+    () => (pos ? [{ price: pos.entry_price, title: "Jev entry", kind: "entry" }] : []),
+    [pos?.entry_price],
   );
 
   const c = coin;

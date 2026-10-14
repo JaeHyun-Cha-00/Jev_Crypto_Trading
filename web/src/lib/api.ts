@@ -5,8 +5,8 @@ export interface Position {
   qty: number;
   entry_price: number;
   entry_ts: number;
-  stop_price: number;
   mark: number;
+  hours_held: number;
   notional: number;
   unrealized_pnl: number;
   entry_reason: string;
@@ -33,18 +33,50 @@ export interface Trade {
   entry_reason: string;
 }
 
+export interface Question {
+  id: string;
+  instructions: string;
+  /** option id -> criterion text, in the order Jev sees them */
+  options: Record<string, string>;
+  type: "choice" | "noul";
+}
+
 export interface Config {
   exchange: string;
   symbols: string[];
   timeframe: string;
+  jev_model: string;
+  /** hours after a call that it is scored */
   horizon_bars: number;
-  flat_band_pct: number;
-  sizing: Record<string, number | string | null>;
+  prompt_version: string;
+  mandate: string;
+  questions: { entry: Question; manage: Question };
+  initial_equity: number;
+  sizes: Record<BuySize, number>;
+  /** one fill's cost as the mandate quotes it, a fraction */
+  side_cost: number;
 }
 
 // Jev forward log (the collect workflow's data-log branch): /api/forward/*
 
-export type Direction = "up" | "flat" | "down";
+export type BuySize = "small" | "normal" | "large";
+export type EntryChoice = "buy_small" | "buy_normal" | "buy_large" | "wait";
+export type ManageChoice = "hold" | "sell";
+export type Choice = EntryChoice | ManageChoice;
+
+export const CHOICE_LABEL: Record<Choice, string> = {
+  buy_small: "Buy small", buy_normal: "Buy", buy_large: "Buy large", wait: "Wait", hold: "Hold", sell: "Sell",
+};
+
+/** Calls grouped by what Jev chose, scored over the horizon (returns are fractions). */
+export interface ChoiceStats {
+  n: number;
+  mean_ret: number | null;
+  /** share whose price rose */
+  up_rate: number | null;
+  /** share where the choice beat its alternative */
+  right_rate: number | null;
+}
 
 export interface ForwardMetrics {
   decisions: number;
@@ -55,24 +87,17 @@ export interface ForwardMetrics {
   pending: number;
   /** candle of the oldest call still waiting for its outcome (UTC ms); null when none */
   oldest_pending_ts: number | null;
-  hits: number;
-  hit_rate: number | null;
-  realized: Record<Direction, number>;
-  baselines: {
-    majority: { label: Direction | null; hit_rate: number | null };
-    always_flat: { label: "flat"; hit_rate: number | null };
-  };
-  /** rows: predicted, columns: realized, both in `labels` order */
-  confusion: { labels: Direction[]; matrix: number[][] };
-  calibration: { lo: number; hi: number; n: number; mean_confidence: number | null; hit_rate: number | null }[];
-  direction_scores: { n: number; brier: number | null; log_loss: number | null; brier_base_rate: number | null };
-  adverse_move_scores: {
-    n: number;
-    brier: number | null;
-    log_loss: number | null;
-    base_rate: number | null;
-    brier_base_rate: number | null;
-  };
+  right: number;
+  right_rate: number | null;
+  /** a buy is right when the price beat this round trip of costs (a fraction) */
+  round_trip: number;
+  /** every scored entry call, bought or not: the market Jev chose from */
+  entry_all: ChoiceStats;
+  entry: Record<EntryChoice, ChoiceStats>;
+  buys: ChoiceStats;
+  manage: Record<ManageChoice, ChoiceStats>;
+  /** entry calls by p(buy), all sizes together */
+  calibration: (ChoiceStats & { lo: number; hi: number })[];
   cost_usd: number;
 }
 
@@ -92,7 +117,7 @@ export interface ForwardOutcome {
   horizon_bars: number;
   close_at_horizon: number;
   ret_pct: number;
-  direction: Direction;
+  direction: "up" | "flat" | "down";
   min_low_pct: number;
   adverse_move: boolean;
 }
@@ -108,42 +133,50 @@ export interface ForwardRow {
   served_model: string | null;
   latency_ms: number;
   cost_usd: number | null;
-  predicted: Direction | null;
-  confidence: number | null;
-  regime: string | null;
-  /** adverse_move Noul: P(yes) */
-  p_adverse: number | null;
+  /** entry: the account didn't hold the coin; manage: it did */
+  question: "entry" | "manage" | null;
+  choice: Choice | null;
+  p_choice: number | null;
+  /** entry calls: the three buy sizes together */
+  p_buy: number | null;
+  p_sell: number | null;
+  /** the account and position Jev was shown */
+  shown: { account: Record<string, number>; position: Record<string, number> | null } | null;
   outcome: ForwardOutcome | null;
-  hit: boolean | null;
+  right: boolean | null;
 }
 
-/** Jev's simulated account: the policy and simulator replayed over the logged answers (/api/forward/paper). */
+export type ActionKind = "buy" | "sell" | "hold" | "wait" | "no_cash" | "none";
+export const ACTION_LABEL: Record<ActionKind, string> = {
+  buy: "buy", sell: "sell", hold: "hold", wait: "wait", no_cash: "no cash", none: "–",
+};
+
+/** One of Jev's calls and what the account did with it (/api/forward/paper). */
 export interface JevAction {
   symbol: string;
   bar_ts: number;
-  close: number;
+  close: number | null;
   status: "answered" | "abstain" | "error" | null;
-  p_up: number;
-  p_down: number;
-  action: "enter" | "exit" | "hold" | "skip";
+  question: "entry" | "manage" | null;
+  choice: Choice | null;
+  /** Jev's probability for each option */
+  p: Record<string, number>;
+  action: ActionKind;
   reason: string;
   size_frac: number;
 }
 
-/** One hour of Jev's calls (/api/forward/paper `hours`): what it picked, what the account did, how the picks did. */
+/** One hour of Jev's calls (/api/forward/paper `hours`): what it chose to buy, what the account did, how the buys did. */
 export interface JevHour {
   bar_ts: number;
   /** coins logged this hour and how many Jev answered; 0 when the collector skipped the hour */
   asked: number;
   answered: number;
-  /** answers that met the buy thresholds, highest p(up) first; ret and net (after a round trip
-   * of costs) once the horizon has closed, else null. why: the reason's first word, e.g. skill_gate */
-  picks: { symbol: string; p_up: number; p_down: number; action: JevAction["action"] | null; why: string | null;
-           ret: number | null; net: number | null }[];
+  /** coins Jev chose to buy, most confident first; ret and net (after a round trip of costs) once the horizon
+   * has closed, else null. action: buy, or no_cash when the cash ran out */
+  picks: { symbol: string; choice: EntryChoice; p: number; action: ActionKind; ret: number | null; net: number | null }[];
   bought: string[];
   sold: { symbol: string; why: string }[];
-  /** buys the skill gate held back */
-  held_back: number;
   /** the average logged coin's return over the same hours; null until the horizon closes */
   market: number | null;
   /** when this hour's horizon closes (UTC ms) */
@@ -156,18 +189,10 @@ export interface JevPaper {
   slippage_bps: number;
   /** per-side spread from the mid, bps: deep coins pay min, the thinnest max */
   spread_bps: { min: number; max: number };
-  /** a buy is at most this share of the coin's median hourly dollar volume; null = no cap */
-  max_volume_frac: number | null;
-  policy: {
-    entry_threshold: number; min_edge: number; exit_threshold: number; exit_min_edge: number;
-    stop_loss_pct: number; max_holding_bars: number | null;
-  };
-  /** skill gate: buys only while Jev's recent buy signals paid; null = no gate */
-  gate: {
-    lookback_hours: number; min_signals: number; open: boolean; signals: number;
-    /** mean return of those signals after a round trip of costs, and vs the average coin */
-    avg_net: number | null; avg_excess: number | null; reason: string | null;
-  } | null;
+  /** share of equity each buy size spends */
+  sizes: Record<BuySize, number>;
+  side_cost: number;
+  prompt_version: string;
   equity: number;
   cash: number;
   total_return: number;
@@ -175,8 +200,6 @@ export interface JevPaper {
   last_bar_ts: number | null;
   trades: Trade[];
   positions: Position[];
-  /** fill_after: when the run that queued it happened (UTC ms); it fills once that hour is logged */
-  pending: { symbol: string; kind: string; reason: string; size_frac: number; ref_close: number; fill_after: number | null }[];
   curve: CurvePoint[];
   /** newest first, capped by ?actions= */
   actions: JevAction[];
@@ -186,7 +209,7 @@ export interface JevPaper {
   hours: JevHour[];
   /** hourly calls replayed, all symbols */
   calls: number;
-  counts: Partial<Record<JevAction["action"], number>>;
+  counts: Partial<Record<ActionKind, number>>;
   per_symbol: Record<string, { trades: number; pnl: number; buys: number }>;
   /** first candle the portfolio counts (forward_log.start, UTC ms); earlier calls trade nothing */
   tracking_since: number | null;

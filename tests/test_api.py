@@ -29,16 +29,18 @@ def test_health_and_config(env):
     assert c.get("/api/health").json()["status"] == "ok"
     cfg = c.get("/api/config").json()
     assert cfg["symbols"] == ["BTC/USD", "ETH/USD"]
-    assert cfg["sizing"]["risk_per_trade"] == 0.01
+    assert cfg["sizes"] == {"small": 0.05, "normal": 0.10, "large": 0.20}
     assert "api_key" not in str(cfg).lower()
 
 
-def test_config_describes_the_jev_portfolio():
+def test_config_shows_the_prompt_jev_trades_with():
     cfg = app_cfg()
-    cfg.policy = cfg.policy.model_copy(update={"max_holding_bars": 4, "max_holding_bars_by_model": {"jev": None}})
     cfg.jev_paper.initial_equity = 2_500
-    sizing = TestClient(create_app(cfg)).get("/api/config").json()["sizing"]
-    assert sizing["max_holding_bars"] is None and sizing["starting_balance"] == 2_500
+    body = TestClient(create_app(cfg)).get("/api/config").json()
+    assert body["initial_equity"] == 2_500 and body["prompt_version"] == "agent-1"
+    assert "no stop-loss" in body["mandate"] and body["side_cost"] == 0.0077
+    assert set(body["questions"]) == {"entry", "manage"}
+    assert set(body["questions"]["entry"]["options"]) == {"buy_small", "buy_normal", "buy_large", "wait"}
 
 
 def test_old_paper_routes_are_gone(env):
@@ -59,7 +61,7 @@ def test_forward_routes_with_github_mocked(env, monkeypatch):
     c = TestClient(create_app(cfg, forward_log=fwd))
     s = c.get("/api/forward/summary").json()
     assert s["error"] is None and s["source"] == "github"
-    assert s["overall"]["scored"] == 4 and s["overall"]["hit_rate"] == 0.5
+    assert s["overall"]["scored"] == 4 and s["overall"]["right_rate"] == 0.5
     assert s["per_symbol"]["BTC/USD"]["pending"] == 1
     rows = c.get("/api/forward/rows").json()
     assert len(rows) == 7 and rows[0]["outcome"] is None
@@ -75,7 +77,7 @@ def test_forward_unreachable_is_empty_not_500(env):
     s = c.get("/api/forward/summary")
     assert s.status_code == 200
     body = s.json()
-    assert body["overall"]["decisions"] == 0 and body["overall"]["hit_rate"] is None
+    assert body["overall"]["decisions"] == 0 and body["overall"]["right_rate"] is None
     assert "network disabled" in body["error"]
     assert c.get("/api/forward/rows").json() == []
 
@@ -99,6 +101,10 @@ def test_forward_paper_replays_logged_answers(env):
     r = c.get("/api/forward/paper").json()
     assert r["initial_equity"] == cfg.jev_paper.initial_equity and r["last_bar_ts"] is not None
     assert {a["symbol"] for a in r["actions"]} <= {"BTC/USD", "ETH/USD"}
+    # BTC was bought at 100 and sold at 101 an hour later; ETH's retried buy is the only one held.
+    assert [(t["symbol"], t["bars_held"]) for t in r["trades"]] == [("BTC/USD", 1)]
+    assert [p["symbol"] for p in r["positions"]] == ["ETH/USD"]
+    assert r["counts"] == {"buy": 2, "sell": 1, "wait": 2, "none": 2}
     assert len(c.get("/api/forward/paper", params={"actions": 1}).json()["actions"]) == 1
     assert len(c.get("/api/forward/paper", params={"hours": 1}).json()["hours"]) == 1
     assert c.post("/api/forward/paper").status_code == 405

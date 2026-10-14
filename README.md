@@ -1,8 +1,8 @@
 # Jev_Crypto_Trading
 
-A personal research system that paper-trades crypto using **Jev** (TypeSafe AI)
-as a probability model, with a deterministic Python policy layer that owns
-every trading decision.
+A personal research system where **Jev** (TypeSafe AI) paper-trades crypto
+on its own: every hour it decides, coin by coin, whether to buy (and how
+much), wait, hold or sell, and a simulated account executes exactly that.
 
 > **Paper trading only.** This system never places real orders. It uses no
 > exchange API keys and calls no authenticated endpoints. Market data comes from
@@ -10,9 +10,12 @@ every trading decision.
 
 ## Design principle
 
-Jev interprets market state. It does not own trading. Jev outputs
-probabilities, and a rule-based layer decides whether to act, how much to
-trade, and when to exit. All risk limits live in code, never in prompts.
+Jev trades with one **fixed prompt** (`docs/jev_prompt.md`, version-stamped
+and locked by a test): a mandate (long-only spot, costs, the goal is profit
+after costs), the coin's anonymized market state, the account, and the coin's
+position. Code keeps the loop and the memory, the account and positions
+replayed from the log, and executes Jev's choices within the cash it has.
+There is no stop-loss, time limit, position cap or probability threshold.
 
 ## Layout
 
@@ -23,11 +26,9 @@ Python package `src/jevtrade/`, in the order data flows through it:
 | `data/` | Public OHLCV via ccxt (`fetcher.py`) and the dashboard's live Coinbase market data (`market.py`) |
 | `features/` | Closed-candle features, no look-ahead |
 | `state/` | Anonymized JSON market state for the model |
-| `decision/` | The questions and the Jev model (via OpenRouter); `python -m jevtrade.decision` asks Jev once from the terminal |
-| `policy/` | Probabilities → actions, risk limits |
-| `sim.py` | Simulated account behind the Jev portfolio |
-| `collect/` | Hourly forward log of Jev's answers and outcomes (GitHub Actions → `data-log` branch), and `kick.py`, which starts the run when GitHub skips it |
-| `forward/` | Reading the forward log back (`log.py`), scoring it, and replaying Jev's paper account from it (`portfolio.py`) |
+| `decision/` | The Jev client (via OpenRouter) and the fixed prompt (`agent.py`); `python -m jevtrade.decision` asks Jev once from the terminal |
+| `collect/` | The hourly run: Jev trades the account one closed candle at a time (GitHub Actions → `data-log` branch), and `kick.py`, which starts the run when GitHub skips it |
+| `forward/` | Reading the forward log back and scoring Jev's choices (`log.py`), and the paper account both the collector and the dashboard step through (`agent.py`) |
 | `api/` | Read-only FastAPI behind the dashboard, and the hosted-site extras (`hosting.py`) |
 | `net.py` | The plain HTTPS GET the readers above share |
 | `config.py` | Typed settings loaded from `config/default.yaml` |
@@ -39,8 +40,8 @@ with `render.yaml` at the root deploy it.
 
 ## How it runs
 
-- **GitHub Actions** (`.github/workflows/collect.yml`) asks Jev about every
-  tracked coin each hour and commits the answers to the `data-log` branch.
+- **GitHub Actions** (`.github/workflows/collect.yml`) has Jev trade every
+  tracked coin each hour and commits its choices to the `data-log` branch.
 - **Render** (`render.yaml`) hosts the dashboard and restarts a skipped hourly
   run: see [Live website](#live-website).
 
@@ -51,9 +52,9 @@ Nothing needs to run on your own computer.
 | Page | What it shows |
 |---|---|
 | **Portfolio** (home, `#/`) | The simulated account at live Coinbase prices, its equity in 5-minute steps, what it holds and what it sold |
-| **Activity** | Jev's picks hour by hour, what the account did, and every call |
-| **Accuracy** | Jev's calls scored against what happened 24 hours later, next to naive baselines |
-| **Rules** | The trading rules and costs below |
+| **Activity** | Jev's buys hour by hour, what the account did, and every call |
+| **Accuracy** | Jev's choices scored against what the price did over the next 24 hours |
+| **Prompt** | The fixed prompt Jev trades with, and how the account executes it |
 | **Market** | Every tracked coin live from Coinbase, with a page per coin |
 
 Times are when Jev decided: just after each hourly candle closes.
@@ -62,17 +63,19 @@ Times are when Jev decided: just after each hourly candle closes.
 
 Simulated with fake money; nothing here places orders.
 
-- **Buy** when Jev gives p(up) ≥ 0.60 and p(up) − p(down) ≥ 0.40 for the next
-  24 hours. Each buy risks 1% of the account at the 8% stop, so it is 12.5% of
-  the account, smaller for thin coins (at most 1% of the coin's hourly dollar
-  volume). The account can be fully invested; strongest signals go first.
-- **Sell** when Jev turns bearish (p(down) ≥ 0.40 and p(down) − p(up) ≥ 0.30)
-  or the price falls 8% below the buy. There is no time limit.
+- Every hour, for a coin the account doesn't hold, Jev chooses **buy small,
+  buy normal, buy large or wait** (5%, 10% or 20% of equity); for a coin it
+  holds, **hold or sell**. It sees how long it has held the coin, the return
+  since the buy, the best and worst since then, and the account's cash.
+- The account sells first, then buys the most confident choices first, each
+  cut to the cash left. Nothing else sells: no stop-loss and no time limit.
 - **Costs** are Coinbase Advanced's: a 0.60% taker fee per side plus an
-  estimated spread, about 1.2–1.8% a round trip.
+  estimated spread, about 1.2–1.8% a round trip. Jev's mandate quotes ~1.5%.
 - It starts at $10,000 from `forward_log.start` (the first decision is an hour
-  later, as that candle closes); the settings are under `policy` and
-  `jev_paper` in `config/default.yaml`.
+  later, as that candle closes); the settings are under `jev_paper` in
+  `config/default.yaml`.
+- Until 2026-10-14 a rule-based policy traded on Jev's direction
+  probabilities instead: see [Version 1](#version-1-rule-based-archived).
 
 ## Live website
 
@@ -123,7 +126,29 @@ data:
 | File | What it covers |
 |---|---|
 | [docs/forward-log.md](docs/forward-log.md) | The hourly forward log of Jev's answers: the collect workflow, the backup kick, the `data-log` branch, the Accuracy page |
-| [docs/jev_prompt.md](docs/jev_prompt.md) | The question Jev is asked and how its answer is read |
+| [docs/jev_prompt.md](docs/jev_prompt.md) | The fixed prompt Jev trades with, and how the account executes it |
+
+## Version 1: rule-based (archived)
+
+From 2026-10-06 to 2026-10-14 Jev answered four fixed questions per coin
+(24-hour direction at a 3% band, regime, an 8% dip, a clear signal) without
+seeing the account, and a rule-based policy traded on the direction
+probabilities: buy at p(up) ≥ 0.60 with an edge of 0.40, sell at
+p(down) ≥ 0.40, an 8% stop.
+
+| | Return, 10-06 18:00Z to 10-14 21:00Z |
+|---|---|
+| Jev account | −14.3% (62 trades, 9 winners) |
+| Equal-weight buy and hold, 82 coins | −9.5% |
+| BTC | −4.5% |
+
+Its direction calls were right 40% of the time against 51% for always
+"flat", and its buy signals returned the same as the average coin. The
+answers followed the last 24 hours (p(up) vs. the prior 24-hour return:
++0.62), so it bought after rises and sold on the first pullback, most within
+hours. The code, the full results and the prompt are on the
+[`v1-rule-based`](https://github.com/JaeHyun-Cha-00/Jev_Crypto_Trading/tree/v1-rule-based)
+branch; its log stays on `data-log` (schema 1 lines).
 
 ## Evaluation validity
 
