@@ -1,6 +1,6 @@
-"""Forward collection: one Jev call per closed candle, backfill, outcomes.
+"""Forward collection: Jev trades its paper account one closed candle at a time.
 
-Jev is replayed from the recorded fixture; nothing touches the network.
+Jev is scripted (`Transport`); nothing touches the network.
 """
 
 import json
@@ -15,24 +15,46 @@ from jevtrade.decision.jev import HttpResponse, JevError, JevModel
 
 from conftest import H, T0, WindowedSource, synthetic_candles
 
-FIXTURE = Path(__file__).parent / "fixtures" / "jev" / "btc_live" / "response.json"
 N = 1500  # candles of history per symbol
-OK = HttpResponse(200, FIXTURE.read_text().strip())
+PINNED = "typesafe/jev-1.13-20260917"
+
+
+def answer(question: str, pick: str, p: float = 0.7) -> HttpResponse:
+    """A System One response choosing `pick` for `question` with probability `p`."""
+    opts = {"entry": ["buy_small", "buy_normal", "buy_large", "wait"], "manage": ["hold", "sell"]}[question]
+    rest = (1 - p) / (len(opts) - 1)
+    probs = {o: (p if o == pick else rest) for o in opts}
+    body = {"model": PINNED, "id": "gen-test", "usage": {"input_tokens": 2000, "cost": 0.00008},
+            "answers": {question: {"type": "choice", "choice": pick, "probabilities": probs, "confidence": p}}}
+    return HttpResponse(200, json.dumps(body))
+
+
+OK = answer("entry", "wait")
 
 
 class Transport:
-    """Replays the recorded response, or a scripted sequence, and counts calls."""
+    """Answers each call from `decide(symbol_index, question, payload)` (default: wait / hold),
+    or from a scripted sequence first, and records every payload."""
 
-    def __init__(self, script=None):
+    def __init__(self, script=None, decide=None):
         self.script = list(script or [])
-        self.calls = 0
+        self.decide = decide
+        self.payloads = []
+
+    @property
+    def calls(self):
+        return len(self.payloads)
 
     def __call__(self, url, payload, headers, timeout_s):
-        self.calls += 1
-        r = self.script.pop(0) if self.script else OK
-        if isinstance(r, Exception):
-            raise r
-        return r
+        self.payloads.append(payload)
+        if self.script:
+            r = self.script.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+        [q] = payload["questions"]
+        pick = self.decide(q, payload) if self.decide else None
+        return answer(q, pick or ("wait" if q == "entry" else "hold"))
 
 
 class MultiSource(WindowedSource):
@@ -77,12 +99,13 @@ def test_first_run_backfills_24_candles_per_symbol(tmp_path):
     btc = sorted(r["candle_ts"] for r in recs if r["symbol"] == "BTC/USD")
     assert btc == [T0 + i * H for i in range(1177, 1201)]
     r = recs[0]
-    assert r["status"] == "answered" and r["served_model"] == "typesafe/jev-1.13-20260917"
-    assert set(r["answers"]) == {"direction", "regime", "adverse_move", "clear_signal"}
-    assert r["answers"]["adverse_move"]["noul"] == 0.32
+    assert r["status"] == "answered" and r["served_model"] == PINNED
+    assert r["question"] == "entry" and set(r["answers"]) == {"entry"}
+    assert r["answers"]["entry"]["choice"] == "wait" and r["prompt_version"] == "agent-1"
+    assert r["shown"] == {"account": {"cash_pct_of_equity": 100.0, "assets_held": 0}, "position": None}
     assert "state" not in r and r["raw_response"] is None and r["cost_usd"] > 0
     assert (tmp_path / "README.md").exists()
-    # The candle itself rides along, for intrabar stops and volume-based costs.
+    # The candle itself rides along, for a position's range and the coin's spread.
     c = MultiSource().series["BTC/USD"][1177]
     first = min((r for r in recs if r["symbol"] == "BTC/USD"), key=lambda r: r["candle_ts"])
     assert [first[k] for k in ("open", "high", "low", "close", "volume")] == pytest.approx(c[1:6])
@@ -113,7 +136,7 @@ def test_state_text_goes_to_a_gzip_file_beside_the_decisions(tmp_path):
         {(r["symbol"], r["candle_ts"], r["input_hash"]) for r in recs}
     assert all(len(s["state"]) > 500 for s in states)
     # Decision lines stay small without the state text.
-    assert max(len(json.dumps(r)) for r in recs) < 2000
+    assert max(len(json.dumps(r)) for r in recs) < 2500
     # The next hour appends a gzip member; the earlier ones still read.
     before = len(states)
     _collector(tmp_path, Transport()).run(_now(1201))
@@ -182,20 +205,29 @@ def test_candle_not_yet_published_is_picked_up_next_run(tmp_path):
     assert t.calls == 4  # the late candle and the new one, for both symbols
 
 
-def test_failed_request_is_retried_but_abstain_is_not(tmp_path):
+def test_failed_and_abstained_calls_are_final(tmp_path):
+    # An hour's answers are final: later positions were shown to Jev on top of them.
     t = Transport([HttpResponse(503, "busy"),
                    HttpResponse(200, json.dumps({"model": "typesafe/other", "answers": {}}))])
     _collector(tmp_path, t, max_backfill=1).run(_now(1200))
     by_sym = {r["symbol"]: r for r in _decisions(tmp_path)}
     assert by_sym["BTC/USD"]["status"] == "error" and by_sym["BTC/USD"]["raw_response"] == "busy"
     assert by_sym["ETH/USD"]["status"] == "abstain"
-
-    t = Transport()
-    res = _collector(tmp_path, t, max_backfill=1).run(_now(1200))
-    assert res.called == [("BTC/USD", T0 + 1200 * H)]
     t = Transport()
     _collector(tmp_path, t, max_backfill=1).run(_now(1200))
     assert t.calls == 0
+
+
+def test_never_asks_about_an_hour_older_than_the_newest_logged(tmp_path):
+    # BTC's 1199 candle shows up only after hour 1200 was asked: it is never asked,
+    # since the account at 1200 was shown to Jev without it.
+    src = MultiSource()
+    src.series["BTC/USD"] = [c for c in src.series["BTC/USD"] if c[0] != T0 + 1199 * H]
+    _collector(tmp_path, Transport(), src, max_backfill=2).run(_now(1200))
+    src.series["BTC/USD"] = MultiSource().series["BTC/USD"]
+    t = Transport()
+    _collector(tmp_path, t, src, max_backfill=3).run(_now(1201))
+    assert t.calls == 2 and ("BTC/USD", T0 + 1199 * H) not in {(r["symbol"], r["candle_ts"]) for r in _decisions(tmp_path)}
 
 
 def test_fatal_error_stops_but_keeps_earlier_answers(tmp_path):
@@ -249,7 +281,7 @@ def test_outcome_labels():
 def test_decision_cli_state_matches_the_collector(tmp_path):
     """`python -m jevtrade.decision` must show Jev the same state the hourly log does."""
     from jevtrade.collect.collector import StateLog
-    from jevtrade.decision.__main__ import _pretty, latest_state
+    from jevtrade.decision.__main__ import _pretty, entry_state, latest_state
 
     c = _collector(tmp_path, Transport(), max_backfill=1, symbols=("BTC/USD",))
     now = _now(N - 1)
@@ -257,7 +289,7 @@ def test_decision_cli_state_matches_the_collector(tmp_path):
     [logged] = StateLog(tmp_path / "state").read("2024-03-03")
     candles, state = latest_state(c.cfg, MultiSource(), "BTC/USD", now)
     assert int(candles.index[-1].value // 1_000_000) == logged["candle_ts"]
-    assert state.text == logged["state"]
+    assert entry_state(c.cfg, state)[0].text == logged["state"]
     assert _pretty("<html>502</html>") == "<html>502</html>"   # error pages print as-is
 
 
@@ -306,3 +338,56 @@ def test_coinbase_prices_reads_every_symbol_in_one_call():
     assert coinbase_prices(["BTC/USD", "ETH/USD", "SOL/USD"], http_get=get) == {"BTC/USD": 85000.5}
     assert calls == ["https://api.exchange.coinbase.com/products/stats"]
 
+
+
+def test_a_buy_is_held_and_managed_next_hour(tmp_path):
+    bought = []
+
+    def decide(q, payload):   # buys the first coin asked (BTC, the first symbol), then holds it 2 hours
+        if q == "entry":
+            bought.append(1)
+            return "buy_normal" if len(bought) == 1 else "wait"
+        return "sell" if payload["state"]["position"]["hours_held"] >= 2 else "hold"
+
+    src = MultiSource()
+    t = Transport(decide=decide)
+    px = src.series["BTC/USD"][1200][4] * 1.01   # Coinbase a little above the candle's close
+    _collector(tmp_path, t, src, max_backfill=1, prices=lambda s: {"BTC/USD": px}).run(_now(1200))
+    [buy] = [r for r in _decisions(tmp_path) if r["answers"]["entry"]["choice"] == "buy_normal"]
+    assert buy["symbol"] == "BTC/USD" and buy["cb_price"] == px
+    for k in (1201, 1202):
+        _collector(tmp_path, Transport(decide=decide), src, max_backfill=1).run(_now(k))
+    btc = sorted((r for r in _decisions(tmp_path) if r["symbol"] == "BTC/USD"), key=lambda r: r["candle_ts"])
+    assert [r["question"] for r in btc] == ["entry", "manage", "manage"]
+    pos = btc[1]["shown"]["position"]
+    assert pos["hours_held"] == 1 and 9 < pos["share_of_equity_pct"] < 11
+    assert btc[1]["shown"]["account"]["assets_held"] == 1
+    assert btc[2]["answers"]["manage"]["choice"] == "sell"
+    # ETH, never bought, sees the account's cash drop by the buy.
+    eth = sorted((r for r in _decisions(tmp_path) if r["symbol"] == "ETH/USD"), key=lambda r: r["candle_ts"])
+    assert eth[1]["shown"]["account"]["cash_pct_of_equity"] < 91 and eth[1]["question"] == "entry"
+
+
+def test_the_collectors_account_is_the_dashboards(tmp_path):
+    """Every position Jev was shown is what replaying the log gives at that hour."""
+    from jevtrade.forward.agent import Account, by_hour
+
+    def decide(q, payload):
+        r1 = payload["state"]["market"]["current"]["ret_1"]
+        if q == "entry":
+            return ["buy_small", "buy_large", "wait", "wait"][int(abs(r1) * 100) % 4]
+        return "sell" if r1 < 0 else "hold"
+
+    c = _collector(tmp_path, Transport(decide=decide), max_backfill=6)
+    c.run(_now(1200))
+    for k in range(1201, 1206):
+        _collector(tmp_path, Transport(decide=decide), max_backfill=6).run(_now(k))
+    recs = _decisions(tmp_path)
+    assert {r["question"] for r in recs} == {"entry", "manage"}
+    acct = Account.new(c.cfg.jev_paper, H)
+    for ts, rows in by_hour(recs).items():
+        acct.mark(rows)
+        for r in rows:
+            assert r["shown"] == acct.view(r["symbol"], ts).as_dict(), (r["symbol"], ts)
+        acct.apply(ts, rows)
+    assert acct.trades   # some round trips happened

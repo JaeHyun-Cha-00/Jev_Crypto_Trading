@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { CHOICE_LABEL } from "../lib/api";
 import type { JevAction } from "../lib/api";
 import { fmtCompact, fmtDelta, fmtPct, fmtPrice, fmtUsd } from "../lib/format";
 import type { LiveCoin, LiveMarket } from "../lib/live";
@@ -9,7 +10,6 @@ import { Coin, LivePrice, Sparkline, Star, tone } from "../components/ui";
 
 export interface JevCoin {
   holding: boolean;
-  buying: boolean;
   /** Jev's latest hourly call on the coin */
   last?: JevAction;
 }
@@ -58,14 +58,11 @@ function Range({ c }: { c: LiveCoin }) {
 function JevBadge({ j }: { j?: JevCoin }) {
   if (!j) return <span className="muted">–</span>;
   if (j.holding) return <span className="tag enter" title="Jev's portfolio holds it">holding</span>;
-  if (j.buying) return <span className="tag" title="Jev's portfolio is buying it next hour">buying</span>;
   const a = j.last;
-  if (!a || a.status !== "answered") return <span className="muted">–</span>;
+  if (!a || !a.choice) return <span className="muted">–</span>;
   return (
-    <span className="jev-odds" title={`Jev's last call: p(up) ${a.p_up.toFixed(2)}, p(down) ${a.p_down.toFixed(2)}`}>
-      <span className="up">{Math.round(a.p_up * 100)}</span>
-      <span className="muted">/</span>
-      <span className="down">{Math.round(a.p_down * 100)}</span>
+    <span className="jev-odds" title={`Jev's last call: ${CHOICE_LABEL[a.choice].toLowerCase()} at ${(a.p[a.choice] ?? 0).toFixed(2)}`}>
+      <span className={a.choice.startsWith("buy") ? "up" : a.choice === "sell" ? "down" : "muted"}>{CHOICE_LABEL[a.choice]}</span>
     </span>
   );
 }
@@ -133,11 +130,11 @@ export function MarketView({
   const ups = byChange.filter((c) => c.change_pct_24h! > 0).length;
   const downs = byChange.filter((c) => c.change_pct_24h! < 0).length;
   const totalVol = priced.reduce((s, c) => s + (c.volume_usd_24h ?? 0), 0);
-  const jevCount = coins.filter((c) => jev[c.symbol]?.holding || jev[c.symbol]?.buying).length;
+  const jevCount = coins.filter((c) => jev[c.symbol]?.holding).length;
 
   const q = query.trim().toLowerCase();
   const rows = coins
-    .filter((c) => (tab === "watch" ? watch.has(c.symbol) : tab === "jev" ? jev[c.symbol]?.holding || jev[c.symbol]?.buying : true))
+    .filter((c) => (tab === "watch" ? watch.has(c.symbol) : tab === "jev" ? jev[c.symbol]?.holding : true))
     .filter((c) => !q || c.symbol.toLowerCase().includes(q) || c.name.toLowerCase().includes(q))
     .sort((a, b) => {
       if (sort.key === "rank") return rank[a.symbol] - rank[b.symbol];
@@ -218,7 +215,7 @@ export function MarketView({
           <p className="muted">Can't load prices: {market.error}</p>
         ) : rows.length === 0 ? (
           <p className="muted">
-            {tab === "watch" ? "No coins on your watchlist yet. Tap ★ on any coin to add it." : tab === "jev" ? "Jev isn't holding or buying anything right now." : q ? `No coin matches "${query}".` : "Loading prices…"}
+            {tab === "watch" ? "No coins on your watchlist yet. Tap ★ on any coin to add it." : tab === "jev" ? "Jev isn't holding anything right now." : q ? `No coin matches "${query}".` : "Loading prices…"}
           </p>
         ) : (
           <div className="scroll tall">

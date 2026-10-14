@@ -1,31 +1,35 @@
-"""Hourly forward collection of Jev answers and their realized outcomes.
+"""Hourly forward collection: Jev trades its paper account, one closed candle at a time.
 
-Each run fetches recent public candles, asks Jev the configured questions once
-for every closed candle (per symbol) that has no answer logged yet, within the
-last `max_backfill` candles, and appends one JSON line per call to
-`<out>/decisions/<YYYY-MM-DD>.jsonl` (the day of the candle's open time, UTC).
-Each line is written as soon as its call returns, so a run that dies midway
-keeps everything it paid for.
+Each run fetches recent public candles for every coin, then walks the closed
+candles not yet asked about, oldest first. For each hour it replays the
+account from the log (jevtrade.forward.agent), shows Jev each coin's market
+state with the account and that coin's position, and asks the fixed
+question that fits (jevtrade.decision.agent): `entry` for a coin the account
+doesn't hold, `manage` for one it does. Then it executes the hour's answers,
+so the next hour's position is what Jev just chose. One JSON line per call
+goes to `<out>/decisions/<YYYY-MM-DD>.jsonl` (the day of the candle's open
+time, UTC) as soon as its call returns, so a run that dies midway keeps
+everything it paid for.
 
-A candle counts as done once Jev answered it, or abstained on a response it
-did send. Only calls that got no response at all (network errors, 5xx after
-retries) are logged with status "error" and asked again on a later run.
+An hour's answers are final: a call that failed (`status: "error"`) or
+abstained does nothing and is not asked again, and a run never asks about an
+hour older than the newest one logged, because later positions were shown to
+Jev on top of it. The newest hour can still be completed for coins a dead
+run never reached.
 
 The state text Jev was shown (a few KB per call, most of a decision line's
 size) goes to `<out>/state/<YYYY-MM-DD>.jsonl.gz` instead, keyed by `symbol`,
 `candle_ts` and `input_hash`. Each run appends one gzip member, so
 the file only grows at the end and git stores each hour as a small delta.
-Decision lines written before this split still carry `state` inline.
 
 Once a decision's horizon has closed, the realized outcome (close-to-close
 change, direction label, deepest dip below the decision close) goes to
-`<out>/outcomes/<YYYY-MM-DD>.jsonl`, keyed the same way. Nothing here trades
-or simulates positions.
+`<out>/outcomes/<YYYY-MM-DD>.jsonl`, keyed the same way, to score the call.
 
 With a `prices` source, each run also reads every coin's Coinbase price once,
 before asking Jev, and logs it on that run's newest-candle lines (`cb_price`,
-`cb_price_at`), so the dashboard's replay fills a decision right away at the
-price it was made at.
+`cb_price_at`): the account fills that hour's trades at it. Simulated only:
+nothing here places an order.
 """
 
 from __future__ import annotations
@@ -44,34 +48,38 @@ import pandas as pd
 
 from ..data.fetcher import OHLCVSource, fetch_range
 from ..data.timeframes import last_closed_open_ms, ms_to_iso, timeframe_ms
+from ..decision import agent
 from ..decision.base import Decision, DecisionModel, QuestionSpec
+from ..forward import agent as account
 from ..features.compute import compute_features
 from ..state.builder import build_state, state_window
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2   # 2: Jev chooses the trade (question, shown, prompt_version)
 # Extra bars before the state window so the recursive RSI has settled.
 _WARMUP_BARS = 200
 
 README = """# data-log
 
 Written by the hourly `collect` workflow on main (`python -m jevtrade.collect`).
-Nothing here trades or simulates positions.
+Jev trades a paper account here: each line is its choice for one coin and
+hour. Nothing places real orders.
 
 - `decisions/YYYY-MM-DD.jsonl`: one line per Jev call, per symbol and closed 1h
   candle (day = the candle's open time, UTC), with that candle's `open`, `high`,
-  `low`, `close` and `volume` (base units; older lines have only `close`) and `called_at`, when the call was made.
+  `low`, `close` and `volume` (base units) and `called_at`, when the call was made.
+  From schema 2 on, `question` is the question asked (`entry` when the account
+  didn't hold the coin, `manage` when it did), `shown` is the account and
+  position Jev was shown, and `prompt_version` names the prompt's wording.
   Lines for the newest candle of a run also carry the coin's Coinbase price at
   the start of that run (`cb_price`, `cb_price_at`; absent when Coinbase couldn't
-  be read). Lines from 2026-10-05 and 2026-10-06 may carry a Robinhood quote
-  (`rh_bid`, `rh_ask`, `rh_quote_at`); it is no longer logged. `status` is `answered`, `abstain`
-  (Jev responded but the answer was unusable) or `error` (no response; that
-  candle is asked again on a later run). `answers` holds every answer as Jev
-  returned it; a Noul's `noul` is P(yes).
+  be read): that hour's trades fill at it. `status` is `answered`, `abstain`
+  (Jev responded but the answer was unusable) or `error` (no response); either
+  of the last two does nothing. `answers` holds every answer as Jev returned it.
+  Schema 1 lines (before the agent prompt) answered the old direction questions.
 - `state/YYYY-MM-DD.jsonl.gz`: the state text Jev was shown for each call,
   keyed by `symbol`, `candle_ts` and `input_hash` (gzip; `zcat` reads it).
-  Decision lines from before 2026-10-05 still carry it inline as `state`.
 - `outcomes/YYYY-MM-DD.jsonl`: the realized outcome of each decision once its
   horizon has closed, keyed by `symbol` and `candle_ts`.
 """
@@ -123,6 +131,15 @@ class JsonlLog:
                         out.append(rec)
             d += timedelta(days=1)
         return out
+
+    def read_all(self) -> list[dict]:
+        if not self.root.is_dir():
+            return []
+        names = sorted(p.name for p in self.root.glob("*.jsonl"))
+        if not names:
+            return []
+        day_ms = lambda n: int(datetime.fromisoformat(n[:10]).replace(tzinfo=timezone.utc).timestamp() * 1000)  # noqa: E731
+        return self.read(day_ms(names[0]), day_ms(names[-1]) + 86_400_000 - 1)
 
     def append(self, rec: dict) -> None:
         p = self.path(rec["candle_ts"])
@@ -179,13 +196,15 @@ def candles_frame(rows: list[list[float]]) -> pd.DataFrame:
 
 
 def decision_record(symbol: str, ts: int, close: float, d: Decision, qhash: str,
-                    called_at_ms: int, candle: dict | None = None, price: dict | None = None) -> dict:
+                    called_at_ms: int, candle: dict | None = None, price: dict | None = None,
+                    question: str | None = None, shown: dict | None = None) -> dict:
     """One decision line; the state text goes to `StateLog` (see `state_record`).
 
     `candle` adds the candle's open, high, low and volume beside `close`, so the
-    dashboard's replay can trigger stops on intrabar lows and size by volume.
+    account can track a position's range and estimate the coin's spread.
     `price` ({"price", "at"}) adds the coin's Coinbase price when the run asked,
-    as `cb_price` and `cb_price_at`.
+    as `cb_price` and `cb_price_at`. `question` and `shown` are the question
+    asked and the account and position Jev was shown.
     """
     if not d.abstain:
         status = "answered"
@@ -205,6 +224,9 @@ def decision_record(symbol: str, ts: int, close: float, d: Decision, qhash: str,
         **({"cb_price": price["price"], "cb_price_at": ms_to_iso(price["at"])} if price else {}),
         "status": status,
         "abstain_reason": d.abstain_reason,
+        "question": question,
+        "shown": shown,
+        "prompt_version": agent.PROMPT_VERSION,
         "requested_model": x.get("requested_model"),
         "served_model": x.get("served_model"),
         "questions_hash": qhash,
@@ -265,8 +287,8 @@ class Collector:
         self.out = Path(out_dir)
         self.max_backfill = max_backfill
         self.tf_ms = timeframe_ms(app_cfg.data.timeframe)
-        self.questions = app_cfg.decision.resolved_questions(app_cfg.data.timeframe)
-        self.qhash = questions_hash(self.questions)
+        self.questions, self.side_cost = agent.configured(app_cfg)
+        self.qhash = questions_hash(list(self.questions.values()))
         self.decisions = JsonlLog(self.out / "decisions")
         self.outcomes = JsonlLog(self.out / "outcomes")
         self.states = StateLog(self.out / "state")
@@ -286,17 +308,17 @@ class Collector:
         start = self.cfg.forward_log.start_ms()
         if start is not None:   # fresh start: never ask about an earlier candle
             first = max(first, start)
-        horizon = self.cfg.decision.horizon_bars
         self.out.mkdir(parents=True, exist_ok=True)
         readme = self.out / "README.md"
         if not readme.exists() or readme.read_text() != README:
             readme.write_text(README)
 
-        # Decisions old enough to still be waiting on an outcome are re-read too.
-        oldest = first - (horizon + self.max_backfill) * self.tf_ms
-        logged = self.decisions.read(oldest, latest)
-        done = {(r["symbol"], r["candle_ts"]) for r in logged if r.get("status") != "error"}
-        have_outcome = {(r["symbol"], r["candle_ts"]) for r in self.outcomes.read(oldest, latest)}
+        # Every call since the fresh start: the account is replayed from them.
+        logged = [r for r in self.decisions.read_all() if start is None or r["candle_ts"] >= start]
+        if logged:   # never ask about an hour older than the newest one asked
+            first = max(first, max(r["candle_ts"] for r in logged))
+        done = {(r["symbol"], r["candle_ts"]) for r in logged}
+        acct = account.run(logged, self.cfg.jev_paper, self.tf_ms, until_ts=first)
 
         res = CollectResult()
         prices: dict[str, dict] = {}
@@ -304,70 +326,89 @@ class Collector:
             at = int(time.time() * 1000)
             try:
                 prices = {s: {"price": p, "at": at} for s, p in self.prices(list(self.cfg.data.symbols)).items()}
-            except Exception as e:  # noqa: BLE001 - the replay falls back to the hour's candle
+            except Exception as e:  # noqa: BLE001 - trades then fill at the candle's close
                 log.warning("Coinbase prices unavailable: %s", e)
+
+        frames: dict[str, tuple[pd.DataFrame, pd.DataFrame, dict[int, int]]] = {}
+        for sym in self.cfg.data.symbols:
+            # One coin's exchange error (delisted, rate limit) must not cost the
+            # rest of the pass; that coin sits the hour out.
+            try:
+                df = self.fetch(sym, latest)
+            except Exception as e:  # noqa: BLE001 - ccxt raises many types
+                log.warning("%s: candle fetch failed: %s", sym, e)
+                res.failed_symbols.append(sym)
+                continue
+            if df.empty:
+                log.warning("%s: no candles returned", sym)
+                continue
+            frames[sym] = (df, compute_features(df, self.cfg.features),
+                           {int(ix.value // 1_000_000): i for i, ix in enumerate(df.index)})
+
         # One gzip member per run: a member per call compresses about 2.5x worse.
         states: list[dict] = []
         try:
-            for sym in self.cfg.data.symbols:
-                # One coin's exchange error (delisted, rate limit) must not cost the
-                # rest of the pass; that coin is retried next hour.
-                try:
-                    df = self.fetch(sym, latest)
-                except Exception as e:  # noqa: BLE001 - ccxt raises many types
-                    log.warning("%s: candle fetch failed: %s", sym, e)
-                    res.failed_symbols.append(sym)
-                    continue
-                if df.empty:
-                    log.warning("%s: no candles returned", sym)
-                    continue
-                feats = compute_features(df, self.cfg.features)
-                pos = {int(ix.value // 1_000_000): i for i, ix in enumerate(df.index)}
-                self._decide(sym, df, feats, pos, first, latest, done, logged, states, res, prices.get(sym))
-
-                for rec in logged:
-                    key = (rec["symbol"], rec["candle_ts"])
-                    if rec["symbol"] != sym or rec.get("status") == "error" or key in have_outcome:
-                        continue
-                    out = outcome_record(rec, df, self.tf_ms, horizon, self.cfg.decision.flat_band_pct,
-                                         self.cfg.decision.adverse_move_pct)
-                    if out is not None:
-                        self.outcomes.append(out)
-                        have_outcome.add(key)
-                        res.outcomes.append(key)
+            for ts in range(first, latest + 1, self.tf_ms):
+                self._hour(ts, latest, frames, acct, done, logged, states, res, prices)
         finally:   # whatever was asked before a failure keeps its state
             self.states.append(states)
+        self._outcomes(latest, frames, logged, res)
         return res
 
-    def _decide(self, sym: str, df: pd.DataFrame, feats, pos: dict[int, int], first: int, latest: int,
-                done: set, logged: list[dict], states: list[dict], res: CollectResult,
-                price: dict | None = None) -> None:
-        """Ask Jev about every candle of `sym` in [first, latest] not yet answered.
+    def _hour(self, ts: int, latest: int, frames: dict, acct: account.Account, done: set, logged: list[dict],
+              states: list[dict], res: CollectResult, prices: dict[str, dict]) -> None:
+        """Ask Jev about every coin of hour `ts` not asked yet, then execute the hour on `acct`.
 
-        `price` goes only on the `latest` candle's line: older candles being
+        `price` goes only on the `latest` candle's lines: older candles being
         backfilled were decided on hours ago, at other prices.
         """
-        horizon = self.cfg.decision.horizon_bars
-        for ts in range(first, latest + 1, self.tf_ms):
+        rows = [r for r in logged if r["candle_ts"] == ts]
+        todo = []
+        for sym, (df, feats, pos) in frames.items():
             if (sym, ts) in done or ts not in pos:
                 continue
             i = pos[ts]
             lo = max(0, i + 1 - self.window)
-            state = build_state(df.iloc[lo:i + 1], feats.iloc[lo:i + 1], horizon,
-                                self.cfg.data.timeframe, self.cfg.state, self.cfg.features)
-            if state is None:
+            market = build_state(df.iloc[lo:i + 1], feats.iloc[lo:i + 1], self.cfg.decision.horizon_bars,
+                                 self.cfg.data.timeframe, self.cfg.state, self.cfg.features)
+            if market is None:
                 log.warning("%s %s: not enough history for a state", sym, ms_to_iso(ts))
                 continue
-            d = self.model.decide(state, self.questions)
             bar = df.iloc[i]
-            rec = decision_record(sym, ts, float(bar["close"]), d, self.qhash, int(time.time() * 1000),
-                                  {k: float(bar[k]) for k in ("open", "high", "low", "volume")},
-                                  price if ts == latest else None)
+            todo.append((sym, market, {k: float(bar[k]) for k in ("open", "high", "low", "close", "volume")}))
+        acct.mark(rows + [{"symbol": s, "candle_ts": ts, **c} for s, _, c in todo])
+        for sym, market, candle in todo:
+            view = acct.view(sym, ts)
+            q = "manage" if view.position is not None else "entry"
+            state = agent.agent_state(market, view, self.side_cost)
+            d = self.model.decide(state, [self.questions[q]])
+            rec = decision_record(sym, ts, candle["close"], d, self.qhash, int(time.time() * 1000),
+                                  candle, prices.get(sym) if ts == latest else None, q, view.as_dict())
             self.decisions.append(rec)
             states.append(state_record(rec, state.text))
             logged.append(rec)
+            rows.append(rec)
+            done.add((sym, ts))
             res.called.append((sym, ts))
             res.cost_usd += d.cost_usd
             if rec["status"] == "error":
                 res.errors.append((sym, ts))
-            log.info("%s %s: %s", sym, rec["candle_open"], rec["status"])
+            log.info("%s %s: %s %s", sym, rec["candle_open"], q,
+                     ((rec.get("answers") or {}).get(q) or {}).get("choice") or rec["status"])
+        acct.apply(ts, rows)
+
+    def _outcomes(self, latest: int, frames: dict, logged: list[dict], res: CollectResult) -> None:
+        """Log the outcome of every recent call whose horizon has closed."""
+        horizon = self.cfg.decision.horizon_bars
+        oldest = latest - (horizon + self.max_backfill) * self.tf_ms
+        have = {(r["symbol"], r["candle_ts"]) for r in self.outcomes.read(oldest, latest)}
+        for rec in logged:
+            key = (rec["symbol"], rec["candle_ts"])
+            if rec["candle_ts"] < oldest or key in have or rec.get("status") == "error" or rec["symbol"] not in frames:
+                continue
+            out = outcome_record(rec, frames[rec["symbol"]][0], self.tf_ms, horizon,
+                                 self.cfg.decision.flat_band_pct, self.cfg.decision.adverse_move_pct)
+            if out is not None:
+                self.outcomes.append(out)
+                have.add(key)
+                res.outcomes.append(key)

@@ -6,14 +6,23 @@ from pathlib import Path
 import pytest
 
 from jevtrade.config import load_config
-from jevtrade.decision.base import JevConfig, default_questions
+from jevtrade.decision.base import JevConfig, QuestionSpec
 from jevtrade.decision.jev import HttpResponse, JevError, JevModel, build_payload
-from jevtrade.policy.engine import AccountView, Policy, PolicyConfig, RiskState
 from jevtrade.state.builder import MarketState, estimate_tokens
 
 FIXTURE = Path(__file__).parent / "fixtures" / "jev" / "btc_live"
 PINNED = "typesafe/jev-1.13-20260917"
-QS = default_questions(4, 1.0, 3.0, "1h")
+# The questions the recorded fixture answered (the pre-agent prompt): two Choices and two Nouls.
+QS = [
+    QuestionSpec(id="direction", instructions="Where will the close be in 4 hours?",
+                 options={"up": "up", "flat": "flat", "down": "down"}),
+    QuestionSpec(id="regime", instructions="Which regime?",
+                 options={"trend_up": "a", "trend_down": "b", "range": "c", "volatile": "d"}),
+    QuestionSpec(id="adverse_move", type="noul", instructions="A dip of more than 3%?",
+                 options={"true": "yes", "false": "no"}),
+    QuestionSpec(id="clear_signal", type="noul", instructions="A clear setup?",
+                 options={"true": "yes", "false": "no"}),
+]
 
 
 def _state() -> MarketState:
@@ -169,24 +178,6 @@ def test_default_config_pins_a_dated_snapshot():
     assert jev.price_per_input_token_usd == pytest.approx(0.042e-6)
 
 
-def test_direction_question_is_generated_from_config():
-    q = load_config().decision.resolved_questions("1h")[0]
-    assert q.id == "direction"
-    assert "24 hours (24 bars of 1h)" in q.instructions
-    assert "more than 3% above" in q.options["up"] and "+3%" in q.options["up"]
-    assert "between -3% and +3%" in q.options["flat"]
-    assert "more than 3% below" in q.options["down"] and "-3%" in q.options["down"]
-    q2 = default_questions(6, 0.25, 2.0, "15m")[0]
-    assert "90 minutes (6 bars of 15m)" in q2.instructions and "+0.25%" in q2.options["up"]
-
-
-def _with_nouls(adverse: float, clear: float) -> str:
-    body = json.loads(_body())
-    body["answers"]["adverse_move"]["noul"] = adverse
-    body["answers"]["clear_signal"]["noul"] = clear
-    return json.dumps(body)
-
-
 def test_noul_is_the_yes_probability_with_derived_gate_confidence():
     # docs.typesafe.ai/primitives/noul: `noul` is P(yes); a Noul has no separate
     # confidence, and |2p - 1| is the documented confidence-style gate.
@@ -195,36 +186,3 @@ def test_noul_is_the_yes_probability_with_derived_gate_confidence():
     assert a["noul"] == 0.32 and a["probabilities"]["true"] == 0.32
     assert a["choice"] == "false" and a["confidence"] is None
     assert a["gate_confidence"] == pytest.approx(0.36)
-
-
-def test_policy_reads_direction_probabilities_not_noul_values():
-    acct = AccountView(equity=10_000.0, positions={}, marks={},
-                       risk=RiskState(day_start_equity=10_000.0, day=0, cooldown_until_ts=0))
-    pol = Policy(PolicyConfig(), 3_600_000)
-    actions = []
-    for adverse, clear in [(0.0, 0.0), (1.0, 1.0), (0.99, 0.01)]:
-        m, _, _ = _model(HttpResponse(200, _with_nouls(adverse, clear)))
-        d = m.decide(_state(), QS)
-        a = pol.evaluate("BTC/USDT", 0, 100.0, d, acct)
-        assert a.details == {"p_up": 0.22, "p_down": 0.19}
-        actions.append((a.kind, a.reason))
-    assert len(set(actions)) == 1  # noul answers do not move the policy
-
-
-def test_jev_prompt_doc_matches_default_questions():
-    doc = (Path(__file__).parents[1] / "docs" / "jev_prompt.md").read_text()
-    for q in load_config().decision.resolved_questions("1h"):
-        assert f"`{q.id}` ({q.type.capitalize()})" in doc
-        assert q.instructions in doc
-        for k, v in q.options.items():
-            assert f"- `{k}`: {v}" in doc
-
-
-def test_max_holding_bars_follows_direction_horizon(tmp_path):
-    cfg = load_config()
-    assert cfg.decision.horizon_bars == 24 and cfg.policy.max_holding_bars == 24
-    p = tmp_path / "c.yaml"
-    p.write_text("decision: {horizon_bars: 6}\n")
-    assert load_config(p).policy.max_holding_bars == 6
-    p.write_text("decision: {horizon_bars: 6}\npolicy: {max_holding_bars: 10}\n")
-    assert load_config(p).policy.max_holding_bars == 10

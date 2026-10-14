@@ -4,12 +4,13 @@
 demand via **Run workflow**). Each run:
 
 - reads every coin's current Coinbase price in one call and logs it on the
-  newest candle's line (`cb_price`, `cb_price_at`), so the dashboard's
-  portfolio fills a decision right away at the price it was made at;
+  newest candle's line (`cb_price`, `cb_price_at`): that hour's trades fill at it;
 - fetches recent public 1h candles from Coinbase for every coin in `data.symbols`;
-- asks Jev (the pinned snapshot) the configured questions once for each closed
-  candle that has no answer logged yet, looking back at most 24 candles, so a
-  skipped or delayed run is backfilled and no candle is asked twice;
+- walks the closed candles not asked about yet, oldest first, looking back at
+  most 24 candles but never before the newest hour already logged: for each
+  hour it replays the account, asks Jev (the pinned snapshot) once per coin with
+  the fixed prompt (`entry` for a coin the account doesn't hold, `manage` for
+  one it does, see `docs/jev_prompt.md`), and executes the hour's choices;
 - logs the realized outcome of each decision once its horizon has closed;
 - commits the JSONL files to the orphan `data-log` branch, never to main.
 
@@ -18,8 +19,10 @@ candle before it (the backfill stops there), and the API ignores earlier lines,
 so the portfolio starts at its full balance and the accuracy stats start empty.
 To restart, move it to a later hour; earlier lines stay on `data-log`.
 
-No trading and no simulated positions. Calls that got no response at all are
-logged with `status: "error"` and asked again on the next run. The key comes
+Each hour's calls step Jev's paper account (`src/jevtrade/forward/agent.py`),
+so the next hour's questions show the positions Jev just chose. An hour's
+answers are final: a call that got no response is logged with
+`status: "error"`, does nothing, and is not asked again. The key comes
 from the `OPENROUTER_API_KEY` repository secret (Settings → Secrets and
 variables → Actions); the run stops before any call if it is missing. Each
 call costs money: about $0.00008 at the recorded ~2,000 input tokens, so the
@@ -46,17 +49,18 @@ The API reads the `data-log` branch, and the dashboard's **Accuracy** page
 scores each call once the `horizon_bars` it asked about have passed (24 hours,
 so a call made at 10:00 is scored at 10:00 the next day):
 
-- tiles for scored calls (with pending, abstain and error counts), Jev's
-  direction hit rate marked ▲/▼ against the best naive baseline, direction
-  Brier next to the Brier of the realized base rates, and the cost so far;
-- Jev's hit rate next to "always flat" and "always the most common realized
-  class" (a hindsight baseline);
-- a confusion matrix (Jev's call vs. what happened) and a calibration table
-  (Jev's direction confidence in bins vs. hit rate), plus log loss and the
-  adverse-move Brier (the `adverse_move` Noul is P(yes));
+- tiles for scored calls (with pending, abstain and error counts), the share
+  of choices that were right, the average 24-hour return after Jev's buys
+  marked ▲/▼ against every coin it could have bought, and the cost so far. A
+  buy is right when the price then rose by more than a round trip of costs, a
+  wait when it didn't; a hold is right when the price then rose, a sell when it
+  didn't;
+- each choice (buy by size, wait, hold, sell) with its count, the average
+  return that followed, how often the price rose, and how often it was right;
+- entry calls in bins of p(buy) against the return that followed;
 - the recent calls: when Jev decided (just after the candle closed), symbol,
-  call and confidence, regime, P(adverse), realized direction and return, and
-  hit, miss or when the result is due.
+  whether the account held it, Jev's choice and its probability, the return
+  that followed, and right, wrong or when the result is due.
 
 Until the first call is scored, the page says when that will be instead of
 showing empty tables.
@@ -70,7 +74,7 @@ It follows the page's symbol filter and refresh. Configure it under
 | `repo`, `branch` | this repo, `data-log` | where `source: github` reads |
 | `local_dir` | `data-log` | for `source: local`, e.g. `git worktree add data-log origin/data-log` |
 | `refresh_seconds` | `300` | re-read at most this often; a failed refresh keeps the last good data and shows the error |
-| `max_days` | `30` | newest day files to load |
+| `max_days` | `400` | newest day files to load; the account is replayed from `start`, so it must reach back that far |
 | `token_env` | `GITHUB_TOKEN` | env var with an optional GitHub token |
 
 The GitHub source lists files with the contents API and downloads only new

@@ -200,6 +200,13 @@ td.picks-cell { white-space: normal; min-width: 260px; max-width: 420px; }
 .kv dt { color: var(--ink-2); padding-right: 16px; }
 .kv dd { margin: 0; text-align: right; font-weight: 500; font-variant-numeric: tabular-nums; }
 .kv dt:last-of-type, .kv dd:last-of-type { border-bottom: 0; }
+.kv .kv-row { display: contents; }
+/* The prompt page: Jev's mandate and its two questions, as sent. */
+.mandate { margin: 0 0 8px; padding: 12px 14px; border-left: 3px solid var(--series-1); background: var(--surface-2); border-radius: 0 8px 8px 0; color: var(--ink); line-height: 1.55; }
+.question { margin-top: 16px; }
+.question > p { margin: 0 0 6px; color: var(--ink); }
+.question .kv dd { text-align: left; font-weight: 400; }
+.question code, .card h3 code { text-transform: none; letter-spacing: 0; }
 .pending { margin-top: 12px; }
 
 .days { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-wrap: wrap; gap: 6px; }

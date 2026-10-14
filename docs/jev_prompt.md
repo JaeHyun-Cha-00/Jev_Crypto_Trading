@@ -1,107 +1,104 @@
-# Jev decision questions
+# Jev's trading prompt
 
-JevModel asks Jev four questions about the same market state in **one**
-System One request. The questions are independent, so they run in parallel and
-cannot see each other's answers (see TypeSafe's
-[speculative fan-out](https://docs.typesafe.ai/patterns/fan-out.md)).
-`default_questions()` in `src/jevtrade/decision/base.py` generates the text
-below from config; `tests/test_jev.py` checks that this file matches it.
+Jev trades its paper account itself. Every hour, just after each 1h candle
+closes, the collector asks Jev about each coin once, with one fixed question:
+`entry` for a coin the account doesn't hold, `manage` for one it does. Jev's
+choice is the trade. Code only executes it (`src/jevtrade/forward/agent.py`),
+within the cash the account has: there is no stop-loss, time limit, position
+cap or probability threshold.
 
-Jev only interprets the state. It never sees portfolio state, prices, dates or
-tickers, and it never returns an action. The policy layer turns these
-probabilities into trades, and all risk limits live in code.
+The prompt is version **`agent-1`**. `src/jevtrade/decision/agent.py`
+generates the text below from config (`jev_paper.sizes` and the costs), and
+`tests/test_agent.py` checks that this file matches it. Every decision line in
+the log records the version it was asked with (`prompt_version`). Change the
+version whenever the wording changes.
 
 ## State
 
-`state` is the anonymized JSON object built by `state/builder.py`: current
-features (percent returns, realized volatility, volume z-score, RSI, distance
-from moving averages), volatility and return percentiles, and the last bars'
-return, range and volume z-score. It is sent as a JSON object, not a string,
-because TypeSafe recommends named fields when state has several parts.
+`state` is a JSON object with four parts:
 
-## Config
+| Field | What it holds |
+| :- | :- |
+| `mandate` | The standing instructions below, the same for every call |
+| `market` | The coin's anonymized market state from `state/builder.py`: percent returns, realized volatility, volume z-score, RSI, distance from moving averages, percentiles within the trailing 720 bars, and the last 24 bars' return, range and volume z-score. No dates, prices or tickers. |
+| `account` | `cash_pct_of_equity` (cash as a share of the account) and `assets_held` (coins held) |
+| `position` | `null` when the account doesn't hold the coin; otherwise `hours_held`, `return_since_buy_pct` (the price since the buy, before costs), `best_since_buy_pct` and `worst_since_buy_pct` (the highest and lowest the price has been since the buy), and `share_of_equity_pct` |
 
-| Setting | `config/default.yaml` | Used in |
-| :- | :- | :- |
-| `decision.horizon_bars` | `24` (24 hours on 1h candles) | `direction`, `adverse_move` |
-| `decision.flat_band_pct` | `3.0` | `direction`: up > +3%, down < -3%, otherwise flat |
-| `decision.adverse_move_pct` | `8.0` (matches `policy.stop_loss_pct`) | `adverse_move` |
-| `data.timeframe` | `1h` | horizon wording |
+Each decision line keeps the account and position Jev was shown as `shown`.
 
-The band is wider than a round trip's costs (~1.2-1.8% on Coinbase Advanced),
-so an `up`
-answer is a move that still pays after costs. Until 2026-10-05 the questions
-asked about 4 hours and a 1% band (adverse move 3%); a 4-hour move past 1%
-averaged only about 2.5% on these coins, barely more than the costs.
+## Mandate
 
-## The four questions (as sent with config/default.yaml)
+> You run a long-only spot crypto account and decide for one asset at a time, once an hour, just after each 1h bar closes. You can only buy the asset with cash and hold it, or sell it back to cash: no shorting, no leverage. Every buy and every sell costs about 0.8% of the amount traded (taker fee plus spread), so a round trip costs about 1.5%. Your goal is the account's profit after costs; trading has no value in itself. Buy only when you expect the move to more than repay the costs, and sell only when holding no longer pays. Nothing else will sell for you: there is no stop-loss and no time limit, so a position you hold stays open until you sell it.
 
-### 1. `direction` (Choice)
+The costs it quotes are the taker fee plus a mid-depth coin's spread
+(`JevPaperConfig.typical_side_cost`). The account charges each coin its own
+estimated spread, so a deep coin costs a little less and a thin one more.
 
-**Instructions:** Given the market state, where will this asset's close price be 24 hours (24 bars of 1h) after the most recent closed bar, relative to that bar's close?
+## The two questions
+
+### 1. `entry` (Choice): a coin the account doesn't hold
+
+**Instructions:** You do not hold this asset (`position` is null). Under the mandate in `mandate`, and given the asset's `market` state and your `account`, what do you do now?
 
 **Criteria:**
 
-- `up`: The close is more than 3% above the last close (change above +3%).
-- `flat`: The change is between -3% and +3% inclusive.
-- `down`: The close is more than 3% below the last close (change below -3%).
+- `buy_small`: Buy about 5% of the account's equity: an edge that should repay the 1.5% round trip, but with real doubt.
+- `buy_normal`: Buy about 10% of the account's equity: a clear edge that should repay the costs with room to spare.
+- `buy_large`: Buy about 20% of the account's equity: a strong, unusually clear edge.
+- `wait`: Do not buy: no edge large enough to repay the costs, or the setup is unclear.
 
-### 2. `regime` (Choice)
+### 2. `manage` (Choice): a coin the account holds
 
-**Instructions:** Which description best fits this asset's market behaviour over the bars described in the state?
-
-**Criteria:**
-
-- `trend_up`: Persistent gains: price above its moving averages, pullbacks shallow.
-- `trend_down`: Persistent losses: price below its moving averages, bounces shallow.
-- `range`: No persistent direction: price near its moving averages, ordinary volatility.
-- `volatile`: Large swings in both directions: realized volatility high relative to its own history.
-
-### 3. `adverse_move` (Noul)
-
-**Instructions:** Within the next 24 hours (24 bars of 1h) after the most recent closed bar, will this asset's price at any point trade more than 8% below that bar's close?
+**Instructions:** You hold this asset (see `position`). Under the mandate in `mandate`, and given the asset's `market` state, your `position` and your `account`, do you keep it or sell it now?
 
 **Criteria:**
 
-- `true`: Price dips more than 8% below the last close at some point in the window.
-- `false`: Price never falls more than 8% below the last close in the window.
+- `hold`: Keep it: the reason to own it still stands, and holding should pay more than selling now. A pullback or a quiet stretch that doesn't break that reason is not a reason to sell.
+- `sell`: Sell all of it now: the reason to own it has broken, or the gain to expect from here no longer justifies the risk of holding. Selling costs about 0.8% of the position.
 
-### 4. `clear_signal` (Noul)
+## How the account executes an hour
 
-**Instructions:** Does the state show a clear, coherent directional setup, with returns, moving-average distances, RSI and volume pointing the same way?
+1. Every `sell` fills first, at the Coinbase price logged when Jev was asked
+   (`cb_price`), or the candle's close for a backfilled hour.
+2. Then every buy, the most confident first (the probability of the chosen
+   size), at that size's share of the equity after the sells. A buy is cut to
+   the cash left and skipped when the cash is gone (`no_cash`).
+3. `wait`, `hold`, an abstain or a failed call does nothing.
 
-**Criteria:**
+Each fill pays the taker fee (`jev_paper.fee_bps`) and the coin's estimated
+spread. An hour's answers are final: a failed call is not asked again, and the
+collector never asks about an hour older than the newest one logged, because
+later positions were shown to Jev on top of it.
 
-- `true`: The indicators agree on one direction and the move is distinct from noise.
-- `false`: The indicators are mixed, contradictory, or too small to distinguish from noise.
+## Scoring
+
+The **Accuracy** page scores each call 24 hours later (`decision.horizon_bars`):
+a buy was right when the price then rose by more than a round trip of costs,
+a wait when it didn't; a hold was right when the price then rose, a sell when
+it didn't.
 
 ## Reading the answers
 
-- **Choice** (`direction`, `regime`): `probabilities` gives one probability
-  per option, and `confidence` (0 to 1) says how concentrated that
-  distribution is. The policy reads `p(up)` and `p(down)` from `direction`.
-- **Noul** (`adverse_move`, `clear_signal`): `noul` **is** the probability
-  that the answer is yes. TypeSafe returns no separate confidence for a Noul;
-  a value near 0.5 is the model saying it is unsure
-  ([Noul](https://docs.typesafe.ai/primitives/noul.md),
-  [Confidence](https://docs.typesafe.ai/confidence.md#noul)). JevModel stores
-  it as `{"true": p, "false": 1 - p}` and derives the documented
-  confidence-style gate `|2p - 1|` as `gate_confidence`.
-- The policy currently uses only `direction`. `regime`, `adverse_move` and
-  `clear_signal` are stored for calibration and later policy rules.
-
-## Storage
-
-Every call is written to the `decisions` table (input hash, state text, model
-version, raw response, latency, input tokens, cost) and every answer to
-`decision_answers`: question, type, selected option, probabilities, raw
-`noul`, model-reported `confidence`, and `gate_confidence`. Join on
-`decisions.symbol` and `bar_ts` with later candles to check calibration.
+`probabilities` gives one probability per option and `confidence` (0 to 1)
+says how concentrated that distribution is
+([Choice](https://docs.typesafe.ai/primitives/choice.md),
+[Confidence](https://docs.typesafe.ai/confidence.md)). The account acts on
+`choice`, the most probable option, and orders buys by its probability.
 
 ## Failure handling
 
-- If any question is missing from the answer, if the served model differs
-  from the pinned `decision.jev.model`, or if the call fails after retries,
-  the decision **abstains** and the policy does not trade.
+- If the answer is missing, if the served model differs from the pinned
+  `decision.jev.model`, or if the call fails after retries, the call
+  **abstains** and nothing is traded for that coin that hour.
 - Auth, billing and bad-request errors (400, 401, 402, 403, 404) raise instead
   of abstaining, because they are configuration problems, not market signals.
+
+## Before `agent-1`
+
+Until 2026-10-14 Jev answered four questions (24-hour direction at a 3% band,
+regime, an 8% adverse move, a clear signal) and a rule-based policy traded on
+them: buy at p(up) ≥ 0.60 and an edge of 0.40, sell at p(down) ≥ 0.40, an 8%
+stop. Over 2026-10-06 to 10-14 that account lost 14.3% while the average coin
+lost 9.5%: Jev never saw its positions, and it sold most of them within hours
+of buying. Those lines (schema 1) stay on `data-log`, and the code is on the
+`v1-rule-based` branch, whose README summarizes the results.

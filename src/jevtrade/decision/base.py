@@ -1,8 +1,8 @@
-"""DecisionModel interface and the questions Jev is asked.
+"""DecisionModel interface and the question format.
 
-Models answer a fixed set of questions about a MarketState with a
-probability distribution over each question's options. Models never see
-portfolio state and never return actions; the policy layer owns that.
+A model answers questions about a MarketState with a probability
+distribution over each question's options. The questions Jev trades with,
+and the account and position it is shown, are in jevtrade.decision.agent.
 """
 
 from __future__ import annotations
@@ -33,88 +33,6 @@ class QuestionSpec(BaseModel):
         return self
 
 
-def _horizon_text(horizon_bars: int, timeframe: str) -> str:
-    from ..data.timeframes import timeframe_ms
-
-    minutes = horizon_bars * timeframe_ms(timeframe) // 60_000
-    if minutes % 60 == 0:
-        hours = minutes // 60
-        span = f"{hours} hour{'s' if hours != 1 else ''}"
-    else:
-        span = f"{minutes} minutes"
-    return f"{span} ({horizon_bars} bars of {timeframe})"
-
-
-def default_questions(
-    horizon_bars: int,
-    flat_band_pct: float,
-    adverse_move_pct: float = 3.0,
-    timeframe: str = "1h",
-) -> list[QuestionSpec]:
-    """The four decision questions documented in docs/jev_prompt.md."""
-    horizon = _horizon_text(horizon_bars, timeframe)
-    band = f"{flat_band_pct:g}%"
-    adverse = f"{adverse_move_pct:g}%"
-    return [
-        QuestionSpec(
-            id="direction",
-            instructions=(
-                f"Given the market state, where will this asset's close price be {horizon} after "
-                "the most recent closed bar, relative to that bar's close?"
-            ),
-            options={
-                "up": f"The close is more than {band} above the last close (change above +{band}).",
-                "flat": f"The change is between -{band} and +{band} inclusive.",
-                "down": f"The close is more than {band} below the last close (change below -{band}).",
-            },
-        ),
-        QuestionSpec(
-            id="regime",
-            instructions=(
-                "Which description best fits this asset's market behaviour over the bars "
-                "described in the state?"
-            ),
-            options={
-                "trend_up": "Persistent gains: price above its moving averages, pullbacks shallow.",
-                "trend_down": "Persistent losses: price below its moving averages, bounces shallow.",
-                "range": "No persistent direction: price near its moving averages, ordinary "
-                         "volatility.",
-                "volatile": "Large swings in both directions: realized volatility high relative "
-                            "to its own history.",
-            },
-        ),
-        QuestionSpec(
-            id="adverse_move",
-            type="noul",
-            instructions=(
-                f"Within the next {horizon} after the most recent closed bar, will this "
-                f"asset's price at any point trade more than {adverse} below that bar's "
-                "close?"
-            ),
-            options={
-                "true": f"Price dips more than {adverse} below the last close at some "
-                        "point in the window.",
-                "false": f"Price never falls more than {adverse} below the last close "
-                         "in the window.",
-            },
-        ),
-        QuestionSpec(
-            id="clear_signal",
-            type="noul",
-            instructions=(
-                "Does the state show a clear, coherent directional setup, with returns, "
-                "moving-average distances, RSI and volume pointing the same way?"
-            ),
-            options={
-                "true": "The indicators agree on one direction and the move is distinct from "
-                        "noise.",
-                "false": "The indicators are mixed, contradictory, or too small to distinguish "
-                         "from noise.",
-            },
-        ),
-    ]
-
-
 class JevConfig(BaseModel):
     """JevModel settings. The API key is read from the environment, never from YAML."""
 
@@ -139,16 +57,13 @@ class JevConfig(BaseModel):
 class DecisionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
 
-    horizon_bars: int = 4       # 4 bars = 4 hours on 1h candles
-    flat_band_pct: float = 1.0  # "up" > +1%, "down" < -1%, otherwise "flat"
-    adverse_move_pct: float = 3.0
-    questions: list[QuestionSpec] | None = None
+    # How each call is scored once it is old enough (the collector's outcomes):
+    # the close `horizon_bars` later, labelled up / flat / down at `flat_band_pct`,
+    # and whether the price dipped more than `adverse_move_pct` on the way.
+    horizon_bars: int = Field(24, ge=1)   # 24 bars = 24 hours on 1h candles
+    flat_band_pct: float = 3.0
+    adverse_move_pct: float = 8.0
     jev: JevConfig = Field(default_factory=JevConfig)
-
-    def resolved_questions(self, timeframe: str = "1h") -> list[QuestionSpec]:
-        return self.questions or default_questions(
-            self.horizon_bars, self.flat_band_pct, self.adverse_move_pct, timeframe
-        )
 
 
 @dataclass

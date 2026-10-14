@@ -2,7 +2,7 @@
 
 Every route is a GET. The forward-log routes only read the collector's JSONL,
 locally or from GitHub (jevtrade.forward.log), and /api/forward/paper replays
-Jev's logged answers through the simulator (jevtrade.forward.portfolio). The
+Jev's logged choices through its paper account (jevtrade.forward.agent). The
 market routes proxy public Coinbase data (jevtrade.data.market). Nothing here
 calls the model or places an order.
 """
@@ -17,7 +17,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from ..data.timeframes import timeframe_ms
 from ..forward.log import ForwardLog
-from ..forward.portfolio import detail_curve, replay
+from ..decision import agent
+from ..forward.agent import detail_curve, replay
 from ..data.market import TIMEFRAMES, Market, MarketError
 from .settings import ApiConfig  # noqa: F401  (re-exported)
 
@@ -25,7 +26,7 @@ from .settings import ApiConfig  # noqa: F401  (re-exported)
 def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | None = None) -> FastAPI:
     """`app_cfg` is a jevtrade.config.AppConfig; `forward_log` and `market` override the
     loaders built from `app_cfg.forward_log` and `app_cfg.market` (tests inject them)."""
-    fwd = forward_log or ForwardLog(app_cfg.forward_log)
+    fwd = forward_log or ForwardLog(app_cfg.forward_log, round_trip=2 * app_cfg.jev_paper.typical_side_cost())
     mkt = market or Market(app_cfg.data.symbols, app_cfg.market)
     app = FastAPI(title="jevtrade (read-only)", version="1",
                   description="Jev's forward log, its replayed portfolio and live market data. GET only.")
@@ -40,17 +41,21 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | 
 
     @app.get("/api/config")
     def config():
-        """Non-secret settings: symbols, the direction question, and the Jev portfolio's sizing and limits."""
-        p = app_cfg.policy.for_model("jev")
+        """Non-secret settings: symbols, Jev's prompt and its account's buy sizes and costs."""
+        questions, side_cost = agent.configured(app_cfg)
+        paper = app_cfg.jev_paper
         return {
             "exchange": app_cfg.data.exchange,
             "symbols": app_cfg.data.symbols,
             "timeframe": app_cfg.data.timeframe,
             "jev_model": app_cfg.decision.jev.model,
             "horizon_bars": app_cfg.decision.horizon_bars,
-            "flat_band_pct": app_cfg.decision.flat_band_pct,
-            "sizing": p.describe_sizing(app_cfg.jev_paper.initial_equity),
-            "policy": p.model_dump(),
+            "prompt_version": agent.PROMPT_VERSION,
+            "mandate": agent.mandate(side_cost),
+            "questions": {k: q.model_dump() for k, q in questions.items()},
+            "initial_equity": paper.initial_equity,
+            "sizes": dict(paper.sizes),
+            "side_cost": side_cost,
         }
 
     @app.get("/api/forward/summary")
@@ -77,8 +82,8 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | 
 
     @app.get("/api/forward/paper")
     def forward_paper(actions: int = Query(200, ge=0, le=5_000), hours: int = Query(168, ge=0, le=5_000)):
-        """Jev's simulated account: the policy and simulator replayed over the forward log's
-        answers and closes from forward_log.start on. No model or exchange calls;
+        """Jev's simulated account: its logged choices replayed from forward_log.start on,
+        the same way the collector stepped it. No model or exchange calls;
         fills are simulated. `actions` and `hours` cap the newest calls and hours returned."""
         out = dict(paper_replay())
         out["actions"] = out["actions"][:actions]

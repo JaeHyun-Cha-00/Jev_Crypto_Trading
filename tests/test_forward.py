@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from jevtrade.forward.log import ForwardLog, NotFound, join, metrics, parse_jsonl
+from jevtrade.forward.log import ForwardLog, NotFound, join, metrics, parse_jsonl, right
 from jevtrade.forward.settings import ForwardLogConfig
 
 FIXTURE = Path(__file__).parent / "fixtures" / "forward"
@@ -20,7 +20,7 @@ def load(folder):
 
 @pytest.fixture
 def rows():
-    return join(load("decisions"), load("outcomes"))
+    return join(load("decisions"), load("outcomes"), round_trip=0.015)
 
 
 def by(rows, sym, i):
@@ -37,53 +37,55 @@ def test_parse_drops_state_and_bad_lines():
 def test_join_one_row_per_candle_newest_first(rows):
     assert len(rows) == 7
     assert [r["candle_ts"] for r in rows] == sorted((r["candle_ts"] for r in rows), reverse=True)
-    # The retried error is replaced by its answer; the unretried one stays an error.
+    # The later line for a candle wins; an error with nothing after it stays an error.
     assert by(rows, "ETH/USD", 1)["status"] == "answered"
     assert by(rows, "ETH/USD", 2)["status"] == "error"
 
 
-def test_join_hits_pending_abstain(rows):
-    hit = by(rows, "BTC/USD", 0)
-    assert hit["predicted"] == "flat" and hit["outcome"]["direction"] == "flat" and hit["hit"] is True
-    assert hit["confidence"] == 0.8 and hit["regime"] == "range" and hit["p_adverse"] == 0.1
-    assert by(rows, "BTC/USD", 1)["hit"] is False
+def test_join_scores_each_choice(rows):
+    buy = by(rows, "BTC/USD", 0)   # bought, and the price rose 3%: more than a round trip
+    assert buy["question"] == "entry" and buy["choice"] == "buy_normal" and buy["right"] is True
+    assert buy["p_choice"] == 0.6 and buy["p_buy"] == pytest.approx(0.6 + 2 * 0.1333, abs=1e-3) and buy["p_sell"] is None
+    sell = by(rows, "BTC/USD", 1)  # sold, and the price then rose
+    assert sell["choice"] == "sell" and sell["p_sell"] == 0.7 and sell["right"] is False
+    assert by(rows, "ETH/USD", 0)["right"] is True     # waited through a 2% drop
+    assert by(rows, "ETH/USD", 1)["right"] is False    # bought into a 1% drop
     pending = rows[0]
-    assert pending["status"] == "answered" and pending["outcome"] is None and pending["hit"] is None
+    assert pending["status"] == "answered" and pending["outcome"] is None and pending["right"] is None
     abstain = by(rows, "BTC/USD", 2)
-    assert abstain["outcome"] is not None and abstain["predicted"] is None and abstain["hit"] is None
+    assert abstain["outcome"] is not None and abstain["choice"] is None and abstain["right"] is None
     err = by(rows, "ETH/USD", 2)
-    assert err["outcome"] is None and err["hit"] is None and err["predicted"] is None
+    assert err["outcome"] is None and err["right"] is None and err["choice"] is None
+
+
+def test_right_rules():
+    assert right("entry", "buy_large", 0.02, 0.015) and not right("entry", "buy_small", 0.01, 0.015)
+    assert right("entry", "wait", 0.01, 0.015) and not right("entry", "wait", 0.02, 0.015)
+    assert right("manage", "hold", 0.001, 0.015) and right("manage", "sell", -0.001, 0.015)
+    assert right("manage", "buy_large", 0.1, 0.015) is None and right(None, None, 0.1, 0.0) is None
 
 
 def test_metrics(rows):
-    m = metrics(rows, cost_usd=1.5)
+    m = metrics(rows, cost_usd=1.5, round_trip=0.015)
     assert (m["decisions"], m["answered"], m["abstain"], m["error"]) == (7, 5, 1, 1)
-    assert (m["scored"], m["pending"], m["hits"]) == (4, 1, 2)
+    assert (m["scored"], m["pending"], m["right"]) == (4, 1, 2)
     assert m["oldest_pending_ts"] == rows[0]["candle_ts"]
-    assert m["hit_rate"] == 0.5
-    assert m["realized"] == {"up": 1, "flat": 2, "down": 1}
-    assert m["baselines"]["majority"] == {"label": "flat", "hit_rate": 0.5}
-    assert m["baselines"]["always_flat"]["hit_rate"] == 0.5
-    # rows: predicted up/flat/down; columns: realized up/flat/down
-    assert m["confusion"]["matrix"] == [[0, 1, 0], [1, 1, 0], [0, 0, 1]]
+    assert m["right_rate"] == 0.5 and m["round_trip"] == 0.015
+    assert m["entry_all"]["n"] == 3 and m["entry_all"]["mean_ret"] == pytest.approx(0.0)
+    assert m["buys"] == {"n": 2, "mean_ret": pytest.approx(0.01), "up_rate": 0.5, "right_rate": 0.5}
+    assert m["entry"]["wait"]["n"] == 1 and m["entry"]["buy_large"]["n"] == 0
+    assert m["manage"]["sell"] == {"n": 1, "mean_ret": pytest.approx(0.02), "up_rate": 1.0, "right_rate": 0.0}
     cal = {(b["lo"], b["hi"]): b for b in m["calibration"]}
-    assert sum(b["n"] for b in m["calibration"]) == 4
-    assert cal[(0.5, 0.6)]["hit_rate"] == 1.0 and cal[(0.6, 0.7)]["hit_rate"] == 0.0
-    assert cal[(0.9, 1.0)]["n"] == 1 and cal[(0.0, 0.5)]["hit_rate"] is None
-    d = m["direction_scores"]
-    assert d["n"] == 4 and 0 < d["brier"] < 2 and d["log_loss"] > 0 and d["brier_base_rate"] > 0
-    a = m["adverse_move_scores"]
-    assert a["n"] == 4 and a["base_rate"] == 0.25
-    assert a["brier"] == pytest.approx((0.1**2 + 0.2**2 + 0.3**2 + 0.05**2) / 4)
+    assert sum(b["n"] for b in m["calibration"]) == 3
+    assert cal[(0.6, 1.0)]["n"] == 2 and cal[(0.2, 0.4)]["n"] == 1   # the wait's p(buy) is 0.2
     assert m["cost_usd"] == 1.5
 
 
 def test_metrics_empty():
     m = metrics([])
     assert m["oldest_pending_ts"] is None
-    assert m["scored"] == 0 and m["hit_rate"] is None
-    assert m["baselines"]["majority"]["hit_rate"] is None
-    assert m["direction_scores"]["brier"] is None and m["adverse_move_scores"]["brier"] is None
+    assert m["scored"] == 0 and m["right_rate"] is None
+    assert m["buys"] == {"n": 0, "mean_ret": None, "up_rate": None, "right_rate": None}
 
 
 def test_local_source_summary_and_symbol_filter():
