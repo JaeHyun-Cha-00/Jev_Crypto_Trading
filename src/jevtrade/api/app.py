@@ -9,8 +9,10 @@ calls the model or places an order.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +24,20 @@ from ..decision import agent
 from ..forward.agent import detail_curve, replay
 from ..data.market import TIMEFRAMES, Market, MarketError
 from .settings import ApiConfig  # noqa: F401  (re-exported)
+
+
+log = logging.getLogger(__name__)
+
+
+def memory_mb() -> dict:
+    """This process's resident memory now and at its peak (Linux /proc; {} elsewhere)."""
+    try:
+        status = Path("/proc/self/status").read_text()
+    except OSError:
+        return {}
+    kb = {k: int(v.split()[0]) for k, v in (ln.split(":", 1) for ln in status.splitlines() if ":" in ln)
+          if k in ("VmRSS", "VmHWM")}
+    return {"rss_mb": round(kb.get("VmRSS", 0) / 1024), "peak_rss_mb": round(kb.get("VmHWM", 0) / 1024)}
 
 
 def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | None = None) -> FastAPI:
@@ -38,7 +54,8 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | 
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "time": time.time()}
+        # Memory in use and its peak, to watch against the host's limit (512 MB on free Render).
+        return {"status": "ok", "time": time.time(), **memory_mb()}
 
     @app.get("/api/config")
     def config():
@@ -85,7 +102,10 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | 
                 out["tracking_since"] = (start if start is not None
                                          else (out["curve"][0]["bar_ts"] if out["curve"] else None))
                 paper_cache.update(snap=snap, out=out)
+                log.info("paper replay: %d hours, memory %s", len(out["curve"]), memory_mb())
             return paper_cache["out"]
+
+    app.state.warm = paper_replay   # loads the forward log and replays it (hosting.py may call it at start)
 
     @app.get("/api/forward/paper")
     def forward_paper(actions: int = Query(200, ge=0, le=5_000), hours: int = Query(168, ge=0, le=5_000)):
