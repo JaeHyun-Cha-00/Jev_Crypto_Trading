@@ -415,7 +415,9 @@ const LIVE_KEY = "jev-live-equity";
 
 /** The account at live prices: cash plus each held coin at its latest Coinbase price (the hourly close until one streams). */
 function liveEquity(paper: JevPaper | null, market: LiveMarket): number | null {
-  if (!paper) return null;
+  // No tracked hour yet (or the server hasn't loaded the log yet): that "account" is just the
+  // starting cash, and sampling it would leave a false $10,000 point in the stored live line.
+  if (!paper || !paper.curve.length) return null;
   return paper.cash + paper.positions.reduce((sum, p) => sum + p.qty * (market.bySymbol[p.symbol]?.price ?? p.mark), 0);
 }
 
