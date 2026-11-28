@@ -12,7 +12,8 @@ demand via **Run workflow**). Each run:
   the fixed prompt (`entry` for a coin the account doesn't hold, `manage` for
   one it does, see `docs/jev_prompt.md`), and executes the hour's choices;
 - logs the realized outcome of each decision once its horizon has closed;
-- commits the JSONL files to the orphan `data-log` branch, never to main.
+- builds the dashboard digest (`python -m jevtrade.forward.digest`, below);
+- commits the JSONL files and the digest to the orphan `data-log` branch, never to main.
 
 `forward_log.start` is a fresh-start cutoff: the collector never asks about a
 candle before it (the backfill stops there), and the API ignores earlier lines,
@@ -76,9 +77,30 @@ It follows the page's symbol filter and refresh. Configure it under
 | `refresh_seconds` | `300` | re-read at most this often; a failed refresh keeps the last good data and shows the error |
 | `max_days` | `400` | newest day files to load; the account is replayed from `start`, so it must reach back that far |
 | `token_env` | `GITHUB_TOKEN` | env var with an optional GitHub token |
+| `digest` | `true` | serve the forward routes from the digest (below); `false` loads and replays the log in the API |
 
 The GitHub source lists files with the contents API and downloads only new
 or changed day files. The repo is public, so no token is needed; a
 `GITHUB_TOKEN` with read-only Contents access lifts GitHub's rate limit (and
 would be required if the repo were made private again, in which case the page
 says whether the token is missing or lacks access). It only reads: no writes, model calls or exchange calls.
+
+## Dashboard digest
+
+The log outgrew the free Render instance (512 MB, 0.1 CPU): by late November
+2026 it held 100k+ lines, and loading and replaying them in the web service
+took over 500 MB and minutes of CPU, so the instance was restarted before it
+ever answered. Now each collect run ends with
+
+```bash
+python -m jevtrade.forward.digest --log data-log-tree
+```
+
+which loads the log once in GitHub Actions and writes `dashboard/digest.json.gz`
+(about 1.6 MB): the Accuracy summary, the replayed account (its newest 5,000
+calls and 720 hours) and each coin's newest 200 rows. With `digest: true` the
+API downloads only that file and answers every forward route from it, in
+under 100 MB. The answers are the same as loading the log
+(`tests/test_digest.py`). Until the first digest exists the dashboard is empty
+and its summary says so. To run the API on the log itself, set `digest: false`;
+with `source: local`, build the digest into `local_dir` with the command above.
