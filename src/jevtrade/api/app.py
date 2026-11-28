@@ -1,16 +1,16 @@
 """Read-only HTTP API behind the dashboard.
 
-Every route is a GET. The forward-log routes only read the collector's JSONL,
-locally or from GitHub (jevtrade.forward.log), and /api/forward/paper replays
-Jev's logged choices through its paper account (jevtrade.forward.agent). The
-market routes proxy public Coinbase data (jevtrade.data.market). Nothing here
-calls the model or places an order.
+Every route is a GET. The forward-log routes answer from a view
+(jevtrade.forward.digest): the digest the collect workflow builds after each
+run, or the collector's JSONL read and replayed in process
+(jevtrade.forward.log, jevtrade.forward.agent). The market routes proxy public
+Coinbase data (jevtrade.data.market). Nothing here calls the model or places an
+order.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from pathlib import Path
 
@@ -21,7 +21,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 from ..data.timeframes import timeframe_ms
 from ..forward.log import ForwardLog
 from ..decision import agent
-from ..forward.agent import detail_curve, replay
+from ..forward.agent import detail_curve
+from ..forward.digest import DigestView, LiveView
 from ..data.market import TIMEFRAMES, Market, MarketError
 from .settings import ApiConfig  # noqa: F401  (re-exported)
 
@@ -42,8 +43,16 @@ def memory_mb() -> dict:
 
 def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | None = None) -> FastAPI:
     """`app_cfg` is a jevtrade.config.AppConfig; `forward_log` and `market` override the
-    loaders built from `app_cfg.forward_log` and `app_cfg.market` (tests inject them)."""
-    fwd = forward_log or ForwardLog(app_cfg.forward_log, round_trip=2 * app_cfg.jev_paper.typical_side_cost())
+    loaders built from `app_cfg.forward_log` and `app_cfg.market` (tests inject them).
+
+    The forward routes answer from the digest the collect workflow builds when
+    forward_log.digest is on (and no `forward_log` is given), else from the log itself."""
+    fcfg = app_cfg.forward_log
+    if forward_log is None and fcfg.digest and fcfg.source != "off":
+        view: LiveView | DigestView = DigestView(app_cfg)
+    else:
+        view = LiveView(forward_log or ForwardLog(fcfg, round_trip=2 * app_cfg.jev_paper.typical_side_cost()),
+                        app_cfg)
     mkt = market or Market(app_cfg.data.symbols, app_cfg.market)
     app = FastAPI(title="jevtrade (read-only)", version="1",
                   description="Jev's forward log, its replayed portfolio and live market data. GET only.")
@@ -79,33 +88,22 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | 
     @app.get("/api/forward/summary")
     def forward_summary():
         """Jev's hourly forward log (data-log branch) scored against realized outcomes."""
-        return fwd.summary()
+        return view.summary()
 
     @app.get("/api/forward/rows")
     def forward_rows(symbol: str | None = None, limit: int = Query(100, ge=1, le=2_000)):
-        """Recent decisions, newest first, each with its outcome (null while pending)."""
-        return fwd.rows(symbol, limit)
-
-    paper_cache: dict = {}
-    paper_lock = threading.Lock()
+        """Recent decisions, newest first, each with its outcome (null while pending). From the
+        digest, a coin's newest 200 (jevtrade.forward.digest.ROWS_PER_SYMBOL)."""
+        return view.rows(symbol, limit)
 
     def paper_replay() -> dict:
-        snap = fwd.snapshot()
-        # One replay at a time: the dashboard asks for /paper and /paper/detail at once, and two
-        # replays (or a new one beside the old) are ~100 MB more on a 512 MB host.
-        with paper_lock:
-            if paper_cache.get("snap") is not snap:   # replay once per forward-log refresh
-                paper_cache.clear()   # free the old replay first
-                start = app_cfg.forward_log.start_ms()
-                rows = snap.rows if start is None else [r for r in snap.rows if r["candle_ts"] >= start]
-                out = replay(rows, app_cfg, timeframe_ms(app_cfg.data.timeframe))
-                out["tracking_since"] = (start if start is not None
-                                         else (out["curve"][0]["bar_ts"] if out["curve"] else None))
-                paper_cache.update(snap=snap, out=out)
-                log.info("paper replay: %d hours, memory %s", len(out["curve"]), memory_mb())
-            return paper_cache["out"]
+        return view.paper()
 
-    app.state.warm = paper_replay   # loads the forward log and replays it (hosting.py may call it at start)
+    def warm() -> None:   # hosting.py may call it at start, so the first visitor doesn't wait
+        paper_replay()
+        log.info("forward view ready, memory %s", memory_mb())
+
+    app.state.warm = warm
 
     @app.get("/api/forward/paper")
     def forward_paper(actions: int = Query(200, ge=0, le=5_000), hours: int = Query(168, ge=0, le=5_000)):

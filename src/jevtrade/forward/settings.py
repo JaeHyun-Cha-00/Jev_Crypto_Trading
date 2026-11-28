@@ -23,6 +23,10 @@ class ForwardLogConfig(BaseModel):
     max_days: int = Field(400, ge=1)
     token_env: str = "GITHUB_TOKEN"  # optional; private repos and higher rate limits
     timeout_s: float = Field(20, gt=0)
+    # Serve the forward routes from dashboard/digest.json.gz (built by the collect
+    # workflow after each run) instead of loading the whole log in the API process.
+    # See jevtrade.forward.digest.
+    digest: bool = False
     # Fresh-start cutoff (UTC candle open). The collector never asks Jev about an
     # earlier candle, and the API ignores earlier lines (stats and portfolio).
     # None: no cutoff.

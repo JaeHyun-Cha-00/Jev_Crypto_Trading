@@ -55,6 +55,13 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: python -m jevtrade.collect --out data-log-tree --max-backfill 24 --require-key
 
+      # What the dashboard serves (src/jevtrade/forward/digest.py): the summary, the
+      # replayed account and each coin's newest rows, so the small web service
+      # never loads the whole log. Runs even if Collect failed midway.
+      - name: Build the dashboard digest
+        if: always() && steps.datalog.outcome == 'success'
+        run: python -m jevtrade.forward.digest --log data-log-tree
+
       # Runs even if Collect failed midway, so answers already paid for are kept.
       - name: Commit and push
         if: always() && steps.datalog.outcome == 'success'
