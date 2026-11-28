@@ -36,13 +36,47 @@ BUYS = CHOICES["entry"][:3]
 # p(buy) bins for the calibration table: [lo, hi).
 CAL_EDGES = (0.0, 0.1, 0.2, 0.4, 0.6, 1.0)
 _DAYFILE = re.compile(r"^\d{4}-\d{2}-\d{2}\.jsonl$")
-_DROP = ("state", "raw_response")   # large, and not for the browser
+# Large, duplicated or debugging-only fields that neither the dashboard nor the
+# replay reads. Dropping them as each line is parsed keeps the whole log (100k+
+# lines) inside a free Render instance's 512 MB.
+_DROP = ("state", "raw_response", "schema", "cb_price_at", "requested_model", "questions_hash",
+         "probs", "input_tokens", "attempts", "generation_id", "input_hash")
+_ANSWER_DROP = ("noul", "gate_confidence")
+
+
+_strings: dict[str, str] = {}
+_dicts: dict[tuple, dict] = {}
+
+
+def _shared(s: str) -> str:
+    """One copy of each repeated string (keys, symbols, statuses) instead of one per line."""
+    return _strings.setdefault(s, s)
+
+
+def _compact(v):
+    """`v` with repeated strings shared, and nested dicts shared when their contents are equal.
+
+    Every coin in an hour is shown the same account, and the 2-decimal answer
+    probabilities repeat, so most nested dicts are one of a few thousand. The
+    shared dicts are read-only: nothing downstream mutates a nested value.
+    """
+    if isinstance(v, dict):
+        d = {_shared(k): _compact(x) for k, x in v.items()}
+        try:
+            # type() keeps true apart from 1 and 1.0; a nested dict is already shared, so its id is its content.
+            key = tuple((k, type(x), id(x) if isinstance(x, dict) else x) for k, x in d.items())
+            return _dicts.setdefault(key, d)
+        except TypeError:   # an unhashable value (a list): keep this one unshared
+            return d
+    if isinstance(v, str) and len(v) <= 32:
+        return _shared(v)
+    return v
 _API = "https://api.github.com"
 _RAW = "https://raw.githubusercontent.com"
 
 
 def parse_jsonl(text: str) -> list[dict]:
-    """One record per non-empty line, without the large `state`/`raw_response` fields."""
+    """One record per non-empty line, without the fields in `_DROP` and with repeated strings shared."""
     out = []
     for line in text.splitlines():
         if not line.strip():
@@ -55,7 +89,12 @@ def parse_jsonl(text: str) -> list[dict]:
         if isinstance(rec, dict) and "symbol" in rec and "candle_ts" in rec:
             for k in _DROP:
                 rec.pop(k, None)
-            out.append(rec)
+            for a in (rec.get("answers") or {}).values():
+                if isinstance(a, dict):
+                    for k in _ANSWER_DROP:
+                        a.pop(k, None)
+            # The top-level record stays its own dict: join() adds fields to it.
+            out.append({_shared(k): _compact(v) for k, v in rec.items()})
     return out
 
 
@@ -94,7 +133,11 @@ def join(decisions: list[dict], outcomes: list[dict], round_trip: float = 0.0) -
         pick = ans.get("choice") if ans.get("choice") in CHOICES.get(q, ()) else None
         probs = ans.get("probabilities") or {}
         o = outs.get(key)
-        row = {k: v for k, v in d.items() if k not in _DROP}
+        # In place, not a copy: the loader's file cache holds these records, and a
+        # second copy of every row would double the memory. Each refresh sets the same fields again.
+        row = d
+        for k in _DROP:
+            row.pop(k, None)
         row.update(
             choice=pick,
             p_choice=float(probs[pick]) if pick and pick in probs else None,
@@ -244,7 +287,10 @@ class ForwardLog:
                         files=files, fetched_at=self._clock())
 
     def _newest(self, names: list[str]) -> list[str]:
-        return sorted(n for n in names if _DAYFILE.match(n))[-self.cfg.max_days:]
+        """Day files from the fresh start's day on (earlier lines are dropped anyway), newest `max_days`."""
+        start = self.cfg.start_ms()
+        first = (time.strftime("%Y-%m-%d.jsonl", time.gmtime(start / 1000)) if start is not None else "")
+        return sorted(n for n in names if _DAYFILE.match(n) and n >= first)[-self.cfg.max_days:]
 
     def _read_local(self, folder: str) -> tuple[int, list[dict]]:
         root = Path(self.cfg.local_dir)
