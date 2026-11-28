@@ -235,8 +235,11 @@ class ForwardLog:
             if self._attempt_at is None or now - self._attempt_at >= wait:
                 self._attempt_at = now
                 try:
+                    t0 = time.monotonic()
                     self._snap = self._load()
                     self._error = None
+                    log.info("forward log loaded: %d rows from %d files in %.1fs",
+                             len(self._snap.rows), self._snap.files, time.monotonic() - t0)
                 except Exception as e:  # keep the last good data
                     log.warning("forward log refresh failed: %s", e)
                     self._error = redact(f"{type(e).__name__}: {e}")[:300]

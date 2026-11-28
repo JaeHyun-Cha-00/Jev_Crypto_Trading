@@ -14,6 +14,8 @@ when the matching environment variable is set:
 - JEVTRADE_KEEPALIVE_MIN: every N minutes GET <public URL>/api/health, so a
   free instance that sleeps after idle time stays up for the kick thread.
   The URL is JEVTRADE_PUBLIC_URL, else Render's RENDER_EXTERNAL_URL.
+- JEVTRADE_WARM=1: load the forward log and replay the account in a
+  background thread at start, so the first visitor doesn't wait for it.
 """
 
 from __future__ import annotations
@@ -116,4 +118,14 @@ def apply(app: FastAPI, cfg, env: Mapping[str, str] = os.environ) -> FastAPI:
     if env.get("JEVTRADE_WEB_DIR"):
         add_dashboard(app, env["JEVTRADE_WEB_DIR"])
     start_background(cfg, env)
+    if env.get("JEVTRADE_WARM") == "1" and hasattr(app.state, "warm"):
+        threading.Thread(target=_warm, args=(app.state.warm,), name="warm", daemon=True).start()
     return app
+
+
+def _warm(warm) -> None:
+    """Load the forward log and replay the account before the first visitor asks."""
+    try:
+        warm()
+    except Exception:
+        log.exception("warm-up failed")
