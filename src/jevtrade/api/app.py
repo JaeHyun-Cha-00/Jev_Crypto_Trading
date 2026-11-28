@@ -9,6 +9,7 @@ calls the model or places an order.
 
 from __future__ import annotations
 
+import threading
 import time
 
 from fastapi import FastAPI, HTTPException, Query
@@ -69,16 +70,22 @@ def create_app(app_cfg, forward_log: ForwardLog | None = None, market: Market | 
         return fwd.rows(symbol, limit)
 
     paper_cache: dict = {}
+    paper_lock = threading.Lock()
 
     def paper_replay() -> dict:
         snap = fwd.snapshot()
-        if paper_cache.get("snap") is not snap:   # replay once per forward-log refresh
-            start = app_cfg.forward_log.start_ms()
-            rows = snap.rows if start is None else [r for r in snap.rows if r["candle_ts"] >= start]
-            out = replay(rows, app_cfg, timeframe_ms(app_cfg.data.timeframe))
-            out["tracking_since"] = start if start is not None else (out["curve"][0]["bar_ts"] if out["curve"] else None)
-            paper_cache.update(snap=snap, out=out)
-        return paper_cache["out"]
+        # One replay at a time: the dashboard asks for /paper and /paper/detail at once, and two
+        # replays (or a new one beside the old) are ~100 MB more on a 512 MB host.
+        with paper_lock:
+            if paper_cache.get("snap") is not snap:   # replay once per forward-log refresh
+                paper_cache.clear()   # free the old replay first
+                start = app_cfg.forward_log.start_ms()
+                rows = snap.rows if start is None else [r for r in snap.rows if r["candle_ts"] >= start]
+                out = replay(rows, app_cfg, timeframe_ms(app_cfg.data.timeframe))
+                out["tracking_since"] = (start if start is not None
+                                         else (out["curve"][0]["bar_ts"] if out["curve"] else None))
+                paper_cache.update(snap=snap, out=out)
+            return paper_cache["out"]
 
     @app.get("/api/forward/paper")
     def forward_paper(actions: int = Query(200, ge=0, le=5_000), hours: int = Query(168, ge=0, le=5_000)):

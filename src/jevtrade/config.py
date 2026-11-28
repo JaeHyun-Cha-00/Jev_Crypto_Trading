@@ -15,12 +15,12 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .api.settings import ApiConfig
-from .data.fetcher import PAGE_CAP
+from .data.timeframes import PAGE_CAP
 from .data.market import MarketConfig
 from .forward.settings import ForwardLogConfig, JevPaperConfig
 from .decision.base import DecisionConfig
-from .features.compute import FeatureConfig
-from .state.builder import StateConfig
+from .features.settings import FeatureConfig
+from .state.core import StateConfig
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "default.yaml"
 

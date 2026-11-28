@@ -20,9 +20,7 @@ class OHLCVSource(Protocol):
 
 _CREDENTIAL_FIELDS = ("apiKey", "secret", "password", "uid", "privateKey", "walletAddress")
 
-# Coinbase Exchange (api.exchange.coinbase.com) returns at most 300 candles per
-# request, but pages back through full history.
-PAGE_CAP = 300
+from .timeframes import PAGE_CAP  # noqa: E402  (re-exported)
 
 
 def public_exchange(exchange_id: str, requests_trust_env: bool = True) -> ccxt.Exchange:

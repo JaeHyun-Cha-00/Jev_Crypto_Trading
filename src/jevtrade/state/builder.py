@@ -10,48 +10,20 @@ when state has several parts.
 
 from __future__ import annotations
 
-import hashlib
 import json
-from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict
 
-from ..features.compute import FeatureConfig
+from ..features.settings import FeatureConfig
+from .core import HARD_CONTEXT_LIMIT_TOKENS, MarketState, StateConfig, estimate_tokens
 
-# Rough token estimate (≈4 chars/token for JSON-ish English). Good enough for
-# budgeting; the provider's reported usage is logged when available.
-CHARS_PER_TOKEN = 4
-HARD_CONTEXT_LIMIT_TOKENS = 32_000
-
-
-class StateConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")   # a misspelled key fails loudly
-
-    history_bars: int = 24          # recent bars listed individually
-    percentile_window: int = 720    # bars used for percentile ranks (~30d at 1h)
-    target_max_tokens: int = 2_000
-
-
-@dataclass(frozen=True)
-class MarketState:
-    text: str
-    features: dict[str, float]      # numeric snapshot for non-LLM models
-    est_tokens: int
-
-    @property
-    def input_hash(self) -> str:
-        return hashlib.sha256(self.text.encode()).hexdigest()
+__all__ = ["MarketState", "StateConfig", "build_state", "estimate_tokens", "state_window"]
 
 
 def state_window(state_cfg: StateConfig, feature_cfg: FeatureConfig) -> int:
     """Trailing rows build_state needs to give the same text as full history."""
     return state_cfg.percentile_window + state_cfg.history_bars + feature_cfg.volume_z_window + 1
-
-
-def estimate_tokens(text: str) -> int:
-    return -(-len(text) // CHARS_PER_TOKEN)
 
 
 def _pct(x: float) -> float:

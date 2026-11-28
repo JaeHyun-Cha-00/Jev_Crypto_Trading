@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from ..state.builder import MarketState, estimate_tokens
+from ..state.core import MarketState, estimate_tokens
 from .base import QuestionSpec
 
 PROMPT_VERSION = "agent-1"
