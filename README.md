@@ -20,3 +20,6 @@ hour. Nothing places real orders.
   keyed by `symbol`, `candle_ts` and `input_hash` (gzip; `zcat` reads it).
 - `outcomes/YYYY-MM-DD.jsonl`: the realized outcome of each decision once its
   horizon has closed, keyed by `symbol` and `candle_ts`.
+- `dashboard/digest.json.gz`: what the dashboard serves (the summary, the
+  replayed account and each coin's newest rows), rebuilt after every run by
+  `python -m jevtrade.forward.digest` (gzip JSON).
