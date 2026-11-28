@@ -12,7 +12,7 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ..state.builder import MarketState
+from ..state.core import MarketState
 
 
 class QuestionSpec(BaseModel):

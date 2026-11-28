@@ -20,7 +20,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Callable
 
-from ..state.builder import MarketState
+from ..state.core import MarketState
 from .base import Decision, JevConfig, QuestionSpec
 
 log = logging.getLogger(__name__)
